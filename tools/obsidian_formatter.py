@@ -20,7 +20,7 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 
 @dataclass
@@ -46,6 +46,21 @@ class ObsidianNote:
         return "\n".join(yaml_lines) + "\n\n" + self.body
 
 
+@dataclass
+class SiteMapConfig:
+    style: str = "tree"              # tree | table | both
+    max_internal_links: int = 120
+    max_external_links: int = 30
+    max_depth: int = 3
+
+    def __post_init__(self):
+        if self.style not in {"tree", "table", "both"}:
+            raise ValueError("site_map_style must be one of: tree, table, both")
+        self.max_internal_links = max(1, int(self.max_internal_links))
+        self.max_external_links = max(0, int(self.max_external_links))
+        self.max_depth = max(1, int(self.max_depth))
+
+
 class ObsidianFormatter:
     """
     Convert PipelineResult / clean markdown → Obsidian note with WikiLinks.
@@ -68,6 +83,29 @@ class ObsidianFormatter:
         "stackoverflow.com": ["stackoverflow", "programming", "qa"],
         "twitter.com": ["twitter", "social"],
         "x.com": ["twitter", "social"],
+    }
+
+    MAX_AUTO_TAGS = 12
+
+    TAG_BLACKLIST = {
+        "www", "http", "https", "html", "htm", "php", "asp", "aspx",
+        "index", "default", "home", "main", "page", "pages", "latest",
+        "master", "raw", "edit", "view", "download", "amp",
+        "object", "profile",
+        "en", "vi", "fr", "de", "es", "pt", "jp", "cn", "kr",
+    }
+
+    CONTENT_TAG_HINTS = {
+        "documentation": ["docs", "documentation", "developer docs"],
+        "guide": ["guide", "guides", "tutorial", "walkthrough", "how to"],
+        "api": ["api", "sdk", "endpoint"],
+        "reference": ["reference", "specification", "cli reference"],
+        "repository": ["repository", "repo", "source code"],
+        "release-notes": ["release notes", "changelog", "what's new"],
+        "faq": ["faq", "frequently asked questions"],
+        "pricing": ["pricing", "plans", "billing"],
+        "sponsorship": ["sponsor", "sponsors", "funding"],
+        "blog": ["blog", "newsletter"],
     }
 
     # UI/navigation noise — should not become WikiLinks
@@ -142,6 +180,55 @@ class ObsidianFormatter:
             frontmatter["has_shadow_dom"] = result.extract.layout.has_shadow_dom
 
         return ObsidianNote(frontmatter=frontmatter, body=body)
+
+    def format_agent_context(
+        self,
+        pipeline_result,
+        note_title: Optional[str] = None,
+        max_excerpt_chars: int = 2200,
+    ) -> str:
+        """Build compact context optimized for agent consumption."""
+        result = pipeline_result
+        title = note_title or self._extract_title(result)
+        lines = [f"# Agent Context: {title}", ""]
+        lines.extend(self._build_agent_snapshot_lines(result))
+
+        content_outline = self._extract_content_outline(result.clean_markdown)
+        if content_outline:
+            lines.extend(["", "## Content Outline", ""])
+            for heading in content_outline[:8]:
+                lines.append(f"- {heading}")
+
+        excerpt = self._extract_content_excerpt(result.clean_markdown, max_chars=max_excerpt_chars)
+        if excerpt:
+            lines.extend(["", "## Key Excerpt", "", excerpt])
+
+        return "\n".join(lines).strip()
+
+    def build_site_map(
+        self,
+        pipeline_result,
+        note_title: Optional[str] = None,
+        site_map_config: Optional[SiteMapConfig] = None,
+    ) -> ObsidianNote:
+        """Build a dedicated site map note from a pipeline result."""
+        result = pipeline_result
+        domain = urlparse(result.url).netloc.replace("www.", "")
+        source_title = note_title or self._extract_title(result)
+        config = site_map_config or SiteMapConfig()
+        nav_links = self._collect_nav_links(
+            result,
+            domain,
+            max_internal=config.max_internal_links,
+            max_external=config.max_external_links,
+        )
+        return self._build_map_note(
+            result,
+            domain,
+            nav_links,
+            source_title,
+            site_map_config=config,
+        )
 
     # ------------------------------------------------------------------
     # YouTube-specific formatter
@@ -237,9 +324,13 @@ class ObsidianFormatter:
             f"---\n> 🎬 Video: [{result.url}]({result.url})",
         ]
 
-        tags_base = ["web-clip", "youtube", "video", "media"]
+        tags_base: list[str] = []
+        for tag in ["web-clip", "youtube", "video", "media"]:
+            self._append_tag(tags_base, tag)
         if info.category:
-            tags_base.append(info.category.lower().replace(" ", "-"))
+            self._append_tag(tags_base, info.category)
+        for tag in info.tags[:6]:
+            self._append_tag(tags_base, tag)
 
         frontmatter = {
             "title": title,
@@ -271,7 +362,14 @@ class ObsidianFormatter:
     ) -> ObsidianNote:
         """Format from raw markdown (no PipelineResult required)."""
         domain = urlparse(url).netloc.replace("www.", "")
-        tags = self._build_tags(domain, None)
+        tags = self._build_tags(
+            domain,
+            None,
+            url=url,
+            title=effective_title,
+            clean_markdown=clean_markdown,
+            extract_result=extract_result,
+        )
         entities = self._extract_entities(clean_markdown, None)
 
         # Build internal links from extract_result if available
@@ -388,6 +486,7 @@ class ObsidianFormatter:
             external_links=external_links,
             from_url=from_url,
             from_title=from_title,
+            agent_snapshot_lines=self._build_agent_snapshot_lines(r),
         )
 
     def _build_body_raw(
@@ -402,6 +501,7 @@ class ObsidianFormatter:
         external_links: list[dict] = None,
         from_url: str = "",
         from_title: str = "",
+        agent_snapshot_lines: Optional[list[str]] = None,
     ) -> str:
         lines = []
 
@@ -417,6 +517,10 @@ class ObsidianFormatter:
         if summary:
             lines.append("## 📝 Summary\n")
             lines.append(summary)
+            lines.append("")
+
+        if agent_snapshot_lines:
+            lines.extend(agent_snapshot_lines)
             lines.append("")
 
         # ── Page layout ─────────────────────────────────────────────────────────
@@ -566,6 +670,115 @@ class ObsidianFormatter:
 
         return "\n".join(lines)
 
+    def _build_agent_snapshot_lines(self, result) -> list[str]:
+        """Build a short, high-signal snapshot so an agent can orient quickly."""
+        domain = urlparse(result.url).netloc.replace("www.", "")
+        page_type = self._detect_page_type(result, domain)
+        actions = self._detect_agent_actions(result, domain)
+        framework = "static"
+        section_names: list[str] = []
+        nav_links = self._collect_nav_links(result, domain)
+
+        if result.extract and result.extract.layout:
+            framework = result.extract.layout.framework or "static"
+            section_names = [sec.tag for sec in result.extract.layout.sections[:8]]
+
+        lines = ["## Agent Snapshot\n"]
+        lines.append(f"- **Page type:** `{page_type}`")
+        lines.append(f"- **Framework:** `{framework}`")
+        if section_names:
+            lines.append(f"- **Layout regions:** {', '.join(section_names)}")
+        if actions:
+            lines.append(f"- **Likely actions:** {', '.join(f'`{action}`' for action in actions)}")
+
+        content_outline = self._extract_content_outline(result.clean_markdown)
+        if content_outline:
+            lines.append(f"- **Main headings:** {' | '.join(content_outline[:5])}")
+
+        if result.extract and result.extract.iframes:
+            embed_types = sorted({frame.get('type', 'other') for frame in result.extract.iframes})
+            lines.append(f"- **Embeds:** {', '.join(embed_types)}")
+
+        if nav_links:
+            lines.extend(["", "**Priority links:**"])
+            for link in nav_links[:8]:
+                title = (link.get("title") or link.get("url") or "link").replace("|", "｜")
+                lines.append(f"- {title}: {link['url']}")
+
+        if result.extract and result.extract.interactives:
+            controls = self._summarize_interactives(result.extract.interactives)
+            if controls:
+                lines.extend(["", "**Key controls:**"])
+                for control in controls:
+                    lines.append(f"- {control}")
+
+        return lines
+
+    def _extract_content_outline(self, text: str) -> list[str]:
+        headings = []
+        seen = set()
+        for heading in re.findall(r"^#{1,4} (.+)$", text or "", re.MULTILINE):
+            clean = heading.strip()
+            if clean and clean not in seen:
+                seen.add(clean)
+                headings.append(clean)
+        return headings
+
+    def _extract_content_excerpt(self, text: str, max_chars: int = 2200) -> str:
+        if not text:
+            return ""
+
+        lines = []
+        total = 0
+        for raw_line in text.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            if line.lower() in {"menu", "navigation", "footer"}:
+                continue
+            if total and total + len(line) + 1 > max_chars:
+                break
+            lines.append(line)
+            total += len(line) + 1
+
+        excerpt = "\n".join(lines).strip()
+        if excerpt and len(excerpt) < len(text.strip()):
+            excerpt += "\n\n_(truncated)_"
+        return excerpt
+
+    def _summarize_interactives(self, interactives) -> list[str]:
+        controls: list[str] = []
+
+        for nav in interactives.nav_links[:4]:
+            label = (nav.get("text") or nav.get("aria_label") or nav.get("href") or "navigation link").strip()
+            selector = nav.get("selector") or ""
+            controls.append(f"nav link `{label[:60]}` via `{selector[:60]}`")
+
+        for button in interactives.buttons[:4]:
+            label = (button.get("label") or button.get("aria_label") or button.get("id") or "button").strip()
+            selector = button.get("selector") or ""
+            controls.append(f"button `{label[:60]}` via `{selector[:60]}`")
+
+        for input_field in interactives.inputs[:4]:
+            label = (
+                input_field.get("placeholder")
+                or input_field.get("aria_label")
+                or input_field.get("name")
+                or input_field.get("id")
+                or input_field.get("type")
+                or "input"
+            ).strip()
+            selector = input_field.get("selector") or ""
+            controls.append(f"input `{label[:60]}` via `{selector[:60]}`")
+
+        for form in interactives.forms[:2]:
+            action = form.get("action") or "current page"
+            selector = form.get("selector") or ""
+            method = form.get("method") or "GET"
+            controls.append(f"form `{method}` to `{action[:80]}` via `{selector[:60]}`")
+
+        return controls[:8]
+
     # ------------------------------------------------------------------
     # Wikify — replace entities in text with [[WikiLink]]
     # ------------------------------------------------------------------
@@ -662,12 +875,132 @@ class ObsidianFormatter:
                 return t.strip()
         return urlparse(result.url).netloc
 
-    def _build_tags(self, domain: str, result=None) -> list[str]:
-        tags = ["web-clip"]
+    def _build_tags(
+        self,
+        domain: str,
+        result=None,
+        *,
+        url: str = "",
+        title: str = "",
+        clean_markdown: str = "",
+        extract_result=None,
+    ) -> list[str]:
+        tags: list[str] = []
+        self._append_tag(tags, "web-clip")
+
         for d, dtags in self.DOMAIN_TAGS.items():
             if d in domain:
-                tags.extend(dtags)
+                for tag in dtags:
+                    self._append_tag(tags, tag)
                 break
+
+        page_url = url or getattr(result, "url", "")
+        page_title = title or (self._extract_title(result) if result else "")
+        page_markdown = clean_markdown or getattr(result, "clean_markdown", "") or ""
+        extract = extract_result or getattr(result, "extract", None)
+        metadata = extract.metadata if extract else None
+        layout = extract.layout if extract else None
+
+        if result:
+            page_type = self._detect_page_type(result, domain)
+            if page_type in {"search", "form", "video"}:
+                self._append_tag(tags, page_type)
+
+        if layout:
+            if layout.framework and layout.framework != "static":
+                self._append_tag(tags, layout.framework)
+            if layout.has_shadow_dom:
+                self._append_tag(tags, "shadow-dom")
+
+        if metadata:
+            if metadata.og_type and metadata.og_type.lower() not in {"website", "object", "profile"}:
+                self._append_tag(tags, metadata.og_type)
+            for keyword in metadata.keywords[:6]:
+                self._append_tag(tags, keyword)
+
+        for tag in self._extract_url_tags(page_url, domain):
+            self._append_tag(tags, tag)
+
+        for tag in self._extract_hint_tags(page_title, metadata.description if metadata else "", page_markdown):
+            self._append_tag(tags, tag)
+
+        return tags[: self.MAX_AUTO_TAGS]
+
+    def _append_tag(self, tags: list[str], raw_tag: str) -> None:
+        tag = self._normalize_tag(raw_tag)
+        if tag and tag not in tags:
+            tags.append(tag)
+
+    def _normalize_tag(self, raw_tag: str) -> str:
+        if not raw_tag:
+            return ""
+
+        tag = unquote(str(raw_tag)).strip().lower()
+        tag = tag.replace("&", " and ")
+        tag = re.sub(r"[^\w\s-]", " ", tag, flags=re.UNICODE)
+        tag = re.sub(r"[_\s]+", "-", tag)
+        tag = re.sub(r"-+", "-", tag).strip("-")
+
+        if not tag or tag in self.TAG_BLACKLIST:
+            return ""
+        if len(tag) < 3 or len(tag) > 40:
+            return ""
+        if re.fullmatch(r"\d+", tag):
+            return ""
+        return tag
+
+    def _extract_url_tags(self, url: str, domain: str) -> list[str]:
+        if not url:
+            return []
+
+        parsed = urlparse(url)
+        raw_segments = [seg for seg in parsed.path.split("/") if seg]
+        tags: list[str] = []
+
+        if "github.com" in domain:
+            if len(raw_segments) >= 2:
+                self._append_tag(tags, "repository")
+                self._append_tag(tags, raw_segments[1])
+            if "blob" in raw_segments:
+                self._append_tag(tags, "file")
+                if raw_segments[-1] != "blob":
+                    self._append_tag(tags, raw_segments[-1])
+            if "tree" in raw_segments:
+                self._append_tag(tags, "directory")
+            if "issues" in raw_segments:
+                self._append_tag(tags, "issues")
+            if "pull" in raw_segments or "pulls" in raw_segments:
+                self._append_tag(tags, "pull-request")
+            if "wiki" in raw_segments:
+                self._append_tag(tags, "wiki")
+            segments = raw_segments[1:]
+        else:
+            segments = raw_segments
+
+        for segment in segments:
+            tag = self._normalize_tag(segment)
+            if not tag or tag in self.TAG_BLACKLIST:
+                continue
+            if tag not in tags:
+                tags.append(tag)
+            if len(tags) >= 4:
+                break
+
+        return tags
+
+    def _extract_hint_tags(self, title: str, description: str, clean_markdown: str) -> list[str]:
+        sources = [title or "", (description or "")[:300], " ".join(self._extract_content_outline(clean_markdown)[:4])]
+        combined = " ".join(part.lower() for part in sources if part).strip()
+        tags: list[str] = []
+
+        for tag, hints in self.CONTENT_TAG_HINTS.items():
+            if any(hint in combined for hint in hints):
+                tags.append(tag)
+
+        title_tag = self._normalize_tag(title)
+        if title_tag and title_tag.count("-") <= 3:
+            tags.append(title_tag)
+
         return tags
 
     def _is_noise(self, text: str) -> bool:
@@ -753,42 +1086,55 @@ class ObsidianFormatter:
 
         return files
 
-    def _collect_nav_links(self, result, domain: str) -> list[dict]:
+    def _collect_nav_links(
+        self,
+        result,
+        domain: str,
+        max_internal: int = 60,
+        max_external: int = 25,
+    ) -> list[dict]:
         """Collect all navigation-worthy links from the page."""
-        nav_links: list[dict] = []
+        internal_links: list[dict] = []
+        external_links: list[dict] = []
         seen_urls: set[str] = set()
 
         if not result.extract:
-            return nav_links
+            return []
 
-        for lnk in result.extract.links.internal[:60]:
+        for lnk in result.extract.links.internal:
             text = (lnk.get("text") or "").strip()
-            href = (lnk.get("href") or "").strip()
+            href = self._normalize_nav_url((lnk.get("href") or "").strip())
             if not text or not href or href in seen_urls or self._is_noise(text):
                 continue
             seen_urls.add(href)
             safe = re.sub(r'[<>:"/\\|?*\n\r]', "", text)[:60].strip()
-            nav_links.append({
+            internal_links.append({
                 "title": text[:80],
                 "note": f"[[{safe}]]" if safe else "",
                 "url": href,
                 "type": "internal",
             })
+            if len(internal_links) >= max_internal:
+                break
 
-        for lnk in result.extract.links.external[:25]:
+        for lnk in result.extract.links.external:
             text = (lnk.get("text") or "").strip()
-            href = (lnk.get("href") or "").strip()
+            href = self._normalize_nav_url((lnk.get("href") or "").strip())
             if not text or not href or href in seen_urls or self._is_noise(text):
                 continue
             seen_urls.add(href)
-            nav_links.append({
+            external_links.append({
                 "title": text[:80],
                 "note": "",
                 "url": href,
                 "type": "external",
             })
+            if len(external_links) >= max_external:
+                break
 
-        return nav_links
+        internal_links.sort(key=self._sort_nav_link_key)
+        external_links.sort(key=self._sort_nav_link_key)
+        return internal_links + external_links
 
     def _build_nav_section(self, nav_links: list[dict]) -> str:
         """Build ## Navigation section so the agent knows which links to follow."""
@@ -855,53 +1201,137 @@ class ObsidianFormatter:
             actions.append("watch_video")
         return actions
 
+    def _normalize_nav_url(self, url: str) -> str:
+        parsed = urlparse(url)
+        return parsed._replace(fragment="").geturl()
+
+    def _sort_nav_link_key(self, link: dict) -> tuple:
+        parsed = urlparse(link.get("url", ""))
+        segments = [seg for seg in parsed.path.split("/") if seg]
+        return (
+            len(segments),
+            parsed.path.lower(),
+            parsed.query.lower(),
+            (link.get("title") or "").lower(),
+        )
+
     def _build_map_note(
         self,
         result,
         domain: str,
         nav_links: list[dict],
         source_title: str,
+        site_map_config: Optional[SiteMapConfig] = None,
     ) -> "ObsidianNote":
         """Create a navigation map note for the full domain."""
         today = self._today()
-        internal = [l for l in nav_links if l["type"] == "internal"]
-        external = [l for l in nav_links if l["type"] == "external"]
+        config = site_map_config or SiteMapConfig()
+        internal = [l for l in nav_links if l["type"] == "internal"][:config.max_internal_links]
+        external = [l for l in nav_links if l["type"] == "external"][:config.max_external_links]
+        map_title = f"{source_title} - Site Map"
 
         body_lines = [
-            f"# 🗺️ Site Map — {domain}\n",
+            f"# 🗺️ Site Map — {source_title}\n",
             f"_Updated: {today} | Source: [[{source_title}]]_\n",
-            "## 📍 Internal pages\n",
+            "## Overview\n",
+            f"- **Domain:** `{domain}`",
+            f"- **Root URL:** https://{domain}",
+            f"- **Map style:** `{config.style}`",
+            f"- **Tree depth:** `{config.max_depth}`",
+            f"- **Internal links captured:** {len(internal)}",
+            f"- **External links captured:** {len(external)}",
+            "",
         ]
 
         if internal:
-            body_lines.append("| Page | URL |")
-            body_lines.append("|------|-----|")
-            for lnk in internal[:60]:
-                note = lnk["note"] if lnk["note"] else lnk["title"].replace("|", "｜")
-                body_lines.append(f"| {note} | {lnk['url']} |")
+            if config.style in {"tree", "both"}:
+                body_lines.append("## 🌲 URL Tree\n")
+                body_lines.extend(self._build_internal_tree_lines(internal, config.max_depth))
+                body_lines.append("")
+
+            if config.style in {"table", "both"}:
+                body_lines.append("## 📋 Internal pages\n")
+                body_lines.append("| Page | URL |")
+                body_lines.append("|------|-----|")
+                for lnk in internal:
+                    note = lnk["note"] if lnk["note"] else lnk["title"].replace("|", "｜")
+                    body_lines.append(f"| {note} | {lnk['url']} |")
         else:
+            body_lines.append("## 📋 Internal pages\n")
             body_lines.append("_(no internal pages found)_")
 
         if external:
             body_lines.append("\n## 🌐 External links\n")
             body_lines.append("| Page | URL |")
             body_lines.append("|------|-----|")
-            for lnk in external[:25]:
+            for lnk in external:
                 title = lnk["title"].replace("|", "｜")
                 body_lines.append(f"| [{title}]({lnk['url']}) | {lnk['url']} |")
 
         body_lines.append(f"\n---\n> Auto-generated by Browser-Analyse from: {result.url}")
 
         frontmatter = {
+            "title": map_title,
+            "domain": domain,
             "map_for": domain,
             "last_updated": today,
             "source_page": result.url,
+            "map_style": config.style,
+            "tree_depth": config.max_depth,
             "internal_links_count": len(internal),
             "external_links_count": len(external),
-            "tags": ["site-map", "navigation", "agent-index"],
+            "tags": ["site-map", "tree-map", "navigation", "agent-index"],
         }
 
         return ObsidianNote(frontmatter=frontmatter, body="\n".join(body_lines))
+
+    def _build_internal_tree_lines(self, internal_links: list[dict], max_depth: int) -> list[str]:
+        tree = {"children": {}, "links": []}
+
+        for link in internal_links:
+            parsed = urlparse(link["url"])
+            segments = [
+                self._format_path_segment(seg)
+                for seg in parsed.path.split("/")
+                if seg
+            ]
+
+            node = tree
+            for segment in segments[:max_depth]:
+                key = segment.lower()
+                if key not in node["children"]:
+                    node["children"][key] = {
+                        "label": segment,
+                        "children": {},
+                        "links": [],
+                    }
+                node = node["children"][key]
+
+            node["links"].append(link)
+
+        lines = ["- `/`"]
+        lines.extend(self._render_tree_branch(tree, depth=1))
+        return lines
+
+    def _render_tree_branch(self, node: dict, depth: int) -> list[str]:
+        indent = "  " * depth
+        lines: list[str] = []
+
+        for child in sorted(node["children"].values(), key=lambda item: item["label"].lower()):
+            lines.append(f"{indent}- `{child['label']}/`")
+            lines.extend(self._render_tree_branch(child, depth + 1))
+
+        for link in sorted(node["links"], key=self._sort_nav_link_key):
+            display = link["note"] if link["note"] else link["title"].replace("|", "｜")
+            lines.append(f"{indent}- {display} → {link['url']}")
+
+        return lines
+
+    def _format_path_segment(self, segment: str) -> str:
+        label = unquote(segment).strip()
+        label = re.sub(r"[-_]+", " ", label)
+        label = re.sub(r"\s+", " ", label)
+        return label[:40] or "root"
 
     def _build_entity_stub(
         self,
@@ -949,6 +1379,7 @@ class ObsidianFormatter:
         note_title: Optional[str] = None,
         from_url: str = "",
         from_title: str = "",
+        site_map_config: Optional[SiteMapConfig] = None,
     ) -> list:
         """
         Split a page into multiple sub-notes by layout section.
@@ -996,6 +1427,7 @@ class ObsidianFormatter:
             return f"{safe_title} - {short}"
 
         ie_stem = f"{safe_title} - Interactive Elements"
+        site_map_stem = f"{safe_title} - Site Map"
 
         # Which section receives the clean_markdown content
         content_section = next(
@@ -1051,6 +1483,8 @@ class ObsidianFormatter:
             iv = result.extract.interactives if result.extract else None
             if iv and (iv.buttons or iv.inputs or iv.forms or iv.nav_links):
                 index_lines.append(f"- [[{ie_stem}|Interactive Elements]]")
+            if site_map_config:
+                index_lines.append(f"- [[{site_map_stem}|Site Map]]")
             index_lines.append("")
 
         # Structure table
@@ -1217,6 +1651,14 @@ class ObsidianFormatter:
 
                 ie_lines.append(f"---\n> ↩ [[{safe_title}]]")
                 output.append((f"{ie_stem}.md", "\n".join(ie_lines)))
+
+        if site_map_config:
+            site_map_note = self.build_site_map(
+                result,
+                note_title=title,
+                site_map_config=site_map_config,
+            )
+            output.append((f"{site_map_stem}.md", site_map_note.render()))
 
         return output
 

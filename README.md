@@ -8,10 +8,13 @@ Fetch any URL and produce structured [Obsidian](https://obsidian.md/) Markdown n
 
 | | |
 |---|---|
-| **YAML frontmatter** | title, url, domain, tags, entities, date |
+| **YAML frontmatter** | title, url, domain, smart tags, entities, date |
 | **[[WikiLinks]]** | auto-extracted named entities as Obsidian graph nodes |
 | **🏗️ Page Structure** | layout sections table (`<header>`, `<nav>`, `<main>`, …) |
 | **🖱️ Interactive Elements** | buttons, inputs, forms, nav links with CSS selectors |
+| **🤖 Agent Context** | compact snapshot with page type, likely actions, priority links, and key controls |
+| **🌲 Site Tree Map** | optional dedicated note with hierarchical URL tree, flat table, or both |
+| **🏷️ Smart Auto Tags** | combines domain hints, metadata keywords, URL structure, and page signals |
 | **📑 Split-note mode** | one `.md` per page region in `vault/{Title}/` subfolder |
 | **SPA support** | Playwright renders React / Vue / Next.js before extraction |
 | **YouTube** | channel, views, likes, duration, related videos — no API key |
@@ -46,6 +49,9 @@ python note.py --vault ./vault https://github.com/owner/repo
 # Split into sub-notes per page section
 python note.py --vault ./vault --split https://docs.github.com/en
 
+# Generate a dedicated site tree map
+python note.py --vault ./vault --site-map --site-map-style both https://docs.github.com/en
+
 # Reuse browser profile (logged-in cookies)
 python note.py --vault ./vault --profile chrome https://mail.google.com
 
@@ -70,6 +76,11 @@ python note.py https://example.com
 | `--tags TAG …` | Extra frontmatter tags |
 | `--profile PROFILE` | Browser profile: `chrome` \| `edge` \| `firefox` \| `/abs/path` |
 | `--split` | Split note into sub-notes by page section |
+| `--site-map` | Generate a dedicated site map note |
+| `--site-map-style STYLE` | Site map rendering: `tree` \| `table` \| `both` |
+| `--site-map-depth N` | Maximum URL depth to expand in tree mode |
+| `--site-map-links N` | Maximum internal links to include in the site map |
+| `--site-map-external-links N` | Maximum external links to include in the site map |
 
 ---
 
@@ -106,6 +117,8 @@ tags:
 
 ## Python API
 
+See [API-docs.md](API-docs.md) for a dedicated API reference.
+
 ```python
 from tools import create_obsidian_note, TOOL_SCHEMA
 
@@ -128,6 +141,34 @@ result = create_obsidian_note(
 )
 print(result["path"])   # ./my-vault/GitHub Docs/
 print(result["paths"])  # list of all saved .md files
+
+# Add a hierarchical site map note
+result = create_obsidian_note(
+    url="https://docs.github.com/en",
+    include_site_map=True,
+    site_map_style="tree",
+    site_map_max_depth=3,
+)
+print(result["site_map"])
+
+# LLM-safe structured output + constrained edits
+result = create_obsidian_note(
+    url="https://example.com",
+    render_js=False,
+    llm_config={
+        "user_approved_edits": True,
+        "include_structured_data": True,
+        "structured_data_limit": 8,
+        "edit": {
+            "title": "Example Agent Note",
+            "add_tags": ["llm-ready", "research"],
+            "frontmatter_fields": {"status": "reviewed"},
+            "include_sections": ["agent_snapshot", "content"],
+        },
+    },
+)
+print(result["structured_data"])
+print(result["applied_llm_config"])
 ```
 
 ### Parameters
@@ -143,6 +184,12 @@ print(result["paths"])  # list of all saved .md files
 | `from_title` | `str` | `""` | Title of the source page |
 | `browser_profile` | `str` | `""` | Browser profile shortcut or absolute path |
 | `split_sections` | `bool` | `False` | Split into sub-notes per page section |
+| `include_site_map` | `bool` | `False` | Generate a dedicated site map note |
+| `site_map_style` | `str` | `"tree"` | `tree`, `table`, or `both` |
+| `site_map_max_depth` | `int` | `3` | Maximum URL depth to expand in tree mode |
+| `site_map_max_internal_links` | `int` | `120` | Maximum internal links to include in the site map |
+| `site_map_max_external_links` | `int` | `30` | Maximum external links to include in the site map |
+| `llm_config` | `dict` | `{}` | LLM-safe structured output + constrained edit rules; `llm_config.edit` requires `user_approved_edits=True` |
 
 ### Return value
 
@@ -151,7 +198,12 @@ print(result["paths"])  # list of all saved .md files
     "success":  bool,
     "title":    str,         # note title
     "content":  str,         # Markdown of index/main note
+    "agent_context": str,    # compact context optimized for agent consumption
+    "site_map": str,         # dedicated site/tree map note content
+    "structured_data": dict | None,  # LLM-readable metadata/layout/link snapshot
+    "applied_llm_config": dict,      # accepted/rejected LLM-safe edits
     "path":     str,         # saved file path or folder (split mode)
+    "site_map_path": str,    # saved site map file path
     "paths":    list[str],   # all saved files (split mode only)
     "url":      str,
     "tags":     list[str],
@@ -173,7 +225,7 @@ import openai
 client = openai.OpenAI()
 response = client.chat.completions.create(
     model="gpt-4o",
-    messages=[{"role": "user", "content": "Summarise https://arxiv.org/abs/2307.09288 as an Obsidian note"}],
+    messages=[{"role": "user", "content": "Read https://example.com, return structured data, and keep only the agent snapshot and content sections"}],
     tools=[{"type": "function", "function": TOOL_SCHEMA}],
 )
 
@@ -183,6 +235,12 @@ from tools import create_obsidian_note
 
 args = json.loads(response.choices[0].message.tool_calls[0].function.arguments)
 result = create_obsidian_note(**args)
+
+# The tool enforces its own rules:
+# - protected frontmatter fields like url/domain/tags cannot be overwritten directly
+# - any llm_config.edit change requires explicit user approval via llm_config["user_approved_edits"] = True
+# - only whitelisted note sections can be included/excluded
+# - invalid or blocked edits are reported in result["applied_llm_config"]["rejected"]
 ```
 
 ---
