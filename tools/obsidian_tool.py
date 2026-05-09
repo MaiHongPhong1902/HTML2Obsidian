@@ -913,6 +913,21 @@ QUERY_SCHEMA = {
                 "description": "Also return the full pre-built semantic DOM index (headings, tables, code, lists, images, key_values). Default true.",
                 "default": True,
             },
+            "wait_for_selector": {
+                "type": "string",
+                "description": (
+                    "CSS selector to wait for before taking the DOM snapshot. "
+                    "Use this for SPA pages where content loads asynchronously after initial render. "
+                    "Example: '.product-price', '#app [data-loaded]', 'table tbody tr'. "
+                    "If the selector never appears within wait_for_timeout seconds, the snapshot is taken anyway."
+                ),
+                "default": "",
+            },
+            "wait_for_timeout": {
+                "type": "number",
+                "description": "Max seconds to wait for wait_for_selector to appear. Default 10.",
+                "default": 10,
+            },
         },
         "required": ["url", "queries"],
     },
@@ -925,16 +940,20 @@ def query_page_elements(
     attributes: list[str] | None = None,
     render_js: bool = True,
     include_dom_index: bool = True,
+    wait_for_selector: str = "",
+    wait_for_timeout: float = 10.0,
 ) -> dict:
     """
     Open a URL and run CSS selector queries to extract specific elements.
 
     Parameters:
-        url (str)           — page URL
-        queries (dict)      — {label: css_selector} — each returns up to 50 matched elements
-        attributes (list)   — HTML attributes to include alongside text (e.g. ["href","src"])
-        render_js (bool)    — use Playwright for SPA pages (default True)
-        include_dom_index   — include pre-built semantic DOM index in result
+        url (str)              — page URL
+        queries (dict)         — {label: css_selector} — each returns up to 50 matched elements
+        attributes (list)      — HTML attributes to include alongside text (e.g. ["href","src"])
+        render_js (bool)       — use Playwright for SPA pages (default True)
+        include_dom_index      — include pre-built semantic DOM index in result
+        wait_for_selector (str)— CSS selector to wait for before DOM snapshot (handles async content)
+        wait_for_timeout (float)— max seconds to wait for wait_for_selector (default 10)
 
     Returns:
         dict:
@@ -955,7 +974,12 @@ def query_page_elements(
 
         async def _run():
             if render_js:
-                fetch = await fetcher._fetch_playwright(url, screenshot=False, screenshot_path=None, scroll_to_bottom=False)
+                fetch = await fetcher._fetch_playwright(
+                    url, screenshot=False, screenshot_path=None,
+                    scroll_to_bottom=False,
+                    wait_for_selector=wait_for_selector or None,
+                    wait_for_timeout=wait_for_timeout,
+                )
             else:
                 fetch = await fetcher._fetch_httpx(url)
 

@@ -131,10 +131,15 @@ class PageFetcher:
         screenshot: bool = False,
         screenshot_path: Optional[str] = None,
         scroll_to_bottom: bool = False,
+        wait_for_selector: Optional[str] = None,   # CSS selector to wait for before snapshot
+        wait_for_timeout: float = 10.0,             # max seconds to wait for the selector
     ) -> FetchResult:
         """Synchronous wrapper — calls asyncio.run() internally."""
         return asyncio.run(
-            self.afetch(url, render_js, screenshot, screenshot_path, scroll_to_bottom)
+            self.afetch(
+                url, render_js, screenshot, screenshot_path,
+                scroll_to_bottom, wait_for_selector, wait_for_timeout,
+            )
         )
 
     async def afetch(
@@ -144,6 +149,8 @@ class PageFetcher:
         screenshot: bool = False,
         screenshot_path: Optional[str] = None,
         scroll_to_bottom: bool = False,
+        wait_for_selector: Optional[str] = None,
+        wait_for_timeout: float = 10.0,
     ) -> FetchResult:
         """Async: choose between httpx and Playwright."""
         ext = Path(urlparse(url).path).suffix.lower()
@@ -151,7 +158,8 @@ class PageFetcher:
             return await self._fetch_binary(url)
         if render_js:
             return await self._fetch_playwright(
-                url, screenshot, screenshot_path, scroll_to_bottom
+                url, screenshot, screenshot_path, scroll_to_bottom,
+                wait_for_selector, wait_for_timeout,
             )
         return await self._fetch_httpx(url)
 
@@ -165,6 +173,8 @@ class PageFetcher:
         screenshot: bool,
         screenshot_path: Optional[str],
         scroll_to_bottom: bool,
+        wait_for_selector: Optional[str] = None,
+        wait_for_timeout: float = 10.0,
     ) -> FetchResult:
         try:
             from playwright.async_api import async_playwright
@@ -231,6 +241,18 @@ class PageFetcher:
                     html = await page.content()  # re-fetch after SPA render
                 except Exception:
                     pass  # timeout OK — use current html
+
+                # Wait for a specific selector to appear (caller-defined element readiness)
+                if wait_for_selector:
+                    try:
+                        await page.wait_for_selector(
+                            wait_for_selector,
+                            timeout=wait_for_timeout * 1000,
+                            state="visible",
+                        )
+                        html = await page.content()  # re-snapshot after element appears
+                    except Exception:
+                        pass  # selector never appeared — continue with current html
 
                 # --- Browser context extraction ---
 

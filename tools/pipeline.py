@@ -104,6 +104,8 @@ class BrowserPipeline:
         timeout: float = 30.0,
         browser_profile: Optional[str] = None,
         capture_network: bool = False,         # capture XHR/fetch requests for browser_context
+        wait_for_selector: Optional[str] = None,   # wait for CSS selector before DOM snapshot
+        wait_for_timeout: float = 10.0,            # max seconds to wait for selector
         # Summarize options
         summarize: bool = False,
         summarizer_provider: str = "ollama",
@@ -117,6 +119,8 @@ class BrowserPipeline:
         self.screenshot_path = screenshot_path
         self.scroll_to_bottom = scroll_to_bottom
         self.summarize = summarize
+        self.wait_for_selector = wait_for_selector
+        self.wait_for_timeout = wait_for_timeout
 
         self._fetcher = PageFetcher(
             timeout=timeout,
@@ -148,6 +152,8 @@ class BrowserPipeline:
             screenshot=self.screenshot,
             screenshot_path=self.screenshot_path,
             scroll_to_bottom=self.scroll_to_bottom,
+            wait_for_selector=self.wait_for_selector,
+            wait_for_timeout=self.wait_for_timeout,
         )
 
         result.status_code = fetch.status_code
