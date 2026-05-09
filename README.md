@@ -121,249 +121,46 @@ tags:
 
 ## Python API
 
-See [API-docs.md](API-docs.md) for a dedicated API reference.
+See [API-docs.md](API-docs.md) for full reference: parameters, return values, `browser_context` fields, `query_page_elements`, `TOOL_SCHEMA`, `QUERY_SCHEMA`, `BrowserPipeline`, DOM index, and LLM summarisation.
 
 ```python
 from tools import create_obsidian_note, TOOL_SCHEMA
 from tools import query_page_elements, QUERY_SCHEMA
 
-# Single note returned as string
-result = create_obsidian_note(url="https://en.wikipedia.org/wiki/Obsidian")
-print(result["content"])
+# Save note to vault
+result = create_obsidian_note(url="https://example.com", vault_path="./my-vault")
+print(result["path"])
 
-# Save to vault
-result = create_obsidian_note(
-    url="https://en.wikipedia.org/wiki/Obsidian",
-    vault_path="./my-vault",
-)
-print(result["path"])   # ./my-vault/Obsidian.md
-
-# Split-note mode
-result = create_obsidian_note(
-    url="https://docs.github.com/en",
-    vault_path="./my-vault",
-    split_sections=True,
-)
-print(result["path"])   # ./my-vault/GitHub Docs/
-print(result["paths"])  # list of all saved .md files
-
-# Add a hierarchical site map note
-result = create_obsidian_note(
-    url="https://docs.github.com/en",
-    include_site_map=True,
-    site_map_style="tree",
-    site_map_max_depth=3,
-)
-print(result["site_map"])
-
-# Capture browser context (XHR, metrics, JSON-LD, embedded globals)
+# Capture browser context (XHR, metrics, JSON-LD, DOM index)
 result = create_obsidian_note(
     url="https://shop.example.com/product/123",
     capture_network=True,
-    wait_for_selector=".product-price",  # wait for async content
-    wait_for_timeout=10.0,
+    wait_for_selector=".product-price",
 )
-print(result["browser_context"]["network_requests"])
-print(result["browser_context"]["page_metrics"])
 print(result["browser_context"]["dom_index"]["headings"])
 
-# LLM-safe structured output + constrained edits
-result = create_obsidian_note(
+# Targeted element query (LLM-friendly)
+result = query_page_elements(
     url="https://example.com",
-    render_js=False,
-    llm_config={
-        "user_approved_edits": True,
-        "include_structured_data": True,
-        "structured_data_limit": 8,
-        "edit": {
-            "title": "Example Agent Note",
-            "add_tags": ["llm-ready", "research"],
-            "frontmatter_fields": {"status": "reviewed"},
-            "include_sections": ["agent_snapshot", "content"],
-        },
-    },
+    queries={"title": "h1", "price": ".product-price"},
 )
-print(result["structured_data"])
-print(result["applied_llm_config"])
+print(result["results"])
 ```
-
-### Parameters
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `url` | `str` | **required** | Page URL |
-| `vault_path` | `str` | `""` | Vault directory. Empty = return content only |
-| `note_title` | `str` | `""` | Custom title. Empty = auto-detect from page |
-| `render_js` | `bool` | `True` | Use Playwright for JS rendering |
-| `extra_tags` | `list[str]` | `[]` | Additional frontmatter tags |
-| `from_url` | `str` | `""` | Source URL for backlink |
-| `from_title` | `str` | `""` | Title of the source page |
-| `browser_profile` | `str` | `""` | Browser profile shortcut or absolute path |
-| `split_sections` | `bool` | `False` | Split into sub-notes per page section |
-| `include_site_map` | `bool` | `False` | Generate a dedicated site map note |
-| `site_map_style` | `str` | `"tree"` | `tree`, `table`, or `both` |
-| `site_map_max_depth` | `int` | `3` | Maximum URL depth to expand in tree mode |
-| `site_map_max_internal_links` | `int` | `120` | Maximum internal links to include in the site map |
-| `site_map_max_external_links` | `int` | `30` | Maximum external links to include in the site map |
-| `capture_network` | `bool` | `False` | Capture XHR/fetch requests during page load |
-| `wait_for_selector` | `str` | `""` | CSS selector to wait for before DOM snapshot — handles async/lazy content |
-| `wait_for_timeout` | `float` | `10.0` | Max seconds to wait for `wait_for_selector` |
-| `llm_config` | `dict` | `{}` | LLM-safe structured output + constrained edit rules; `llm_config.edit` requires `user_approved_edits=True` |
-
-### Return value
-
-```python
-{
-    "success":  bool,
-    "title":    str,         # note title
-    "content":  str,         # Markdown of index/main note
-    "agent_context": str,    # compact context optimized for agent consumption
-    "site_map": str,         # dedicated site/tree map note content
-    "structured_data": dict | None,  # LLM-readable metadata/layout/link snapshot
-    "applied_llm_config": dict,      # accepted/rejected LLM-safe edits
-    "browser_context": dict,         # spa_framework, page_metrics, network_requests,
-                                     # embedded_json, json_ld, lazy_images_resolved, dom_index
-    "path":     str,         # saved file path or folder (split mode)
-    "site_map_path": str,    # saved site map file path
-    "paths":    list[str],   # all saved files (split mode only)
-    "url":      str,
-    "tags":     list[str],
-    "entities": list[str],
-    "error":    str | None,
-}
-```
-
-#### `browser_context` fields
-
-| Key | Type | Description |
-|---|---|---|
-| `spa_framework` | `str` | `static` \| `react` \| `vue` \| `angular` \| `next.js` \| `nuxt` |
-| `page_metrics` | `dict` | `load_time_ms`, `dom_content_loaded_ms`, `dom_nodes`, `images`, `scripts`, `links` |
-| `network_requests` | `list` | XHR/fetch calls: `[{url, method, status, content_type}]` (requires `capture_network=True`) |
-| `embedded_json` | `dict` | SSR window globals: `__NEXT_DATA__`, `__NUXT__`, `__REDUX_STATE__`, etc. |
-| `json_ld` | `list` | Parsed `<script type="application/ld+json">` objects |
-| `lazy_images_resolved` | `int` | Count of `data-src` images resolved before snapshot |
-| `dom_index` | `dict` | Semantic DOM index — see [DOM Index](#dom-index) section |
 
 ---
 
 ## LLM Tool Calling
 
-Two tool schemas are available — pass directly to OpenAI / Anthropic / Ollama.
-
-### `TOOL_SCHEMA` — full note creation
-
-`TOOL_SCHEMA` is OpenAI / Anthropic / Ollama compatible:
+Two tool schemas — pass directly to OpenAI / Anthropic / Ollama.
 
 ```python
-from tools import TOOL_SCHEMA
-import openai
-
-client = openai.OpenAI()
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Read https://example.com, return structured data, and keep only the agent snapshot and content sections"}],
-    tools=[{"type": "function", "function": TOOL_SCHEMA}],
-)
-
-# Execute the tool call
-import json
-from tools import create_obsidian_note
-
-args = json.loads(response.choices[0].message.tool_calls[0].function.arguments)
-result = create_obsidian_note(**args)
-
-# The tool enforces its own rules:
-# - protected frontmatter fields like url/domain/tags cannot be overwritten directly
-# - any llm_config.edit change requires explicit user approval via llm_config["user_approved_edits"] = True
-# - only whitelisted note sections can be included/excluded
-# - invalid or blocked edits are reported in result["applied_llm_config"]["rejected"]
+from tools import TOOL_SCHEMA, QUERY_SCHEMA
 ```
 
-### `QUERY_SCHEMA` — targeted element queries
+- **`TOOL_SCHEMA`** — full note creation via `create_obsidian_note()`
+- **`QUERY_SCHEMA`** — targeted element queries via `query_page_elements()`
 
-For when the LLM needs a specific element without generating a full note:
-
-```python
-from tools import query_page_elements, QUERY_SCHEMA
-import openai, json
-
-client = openai.OpenAI()
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "What is the price of the first product on https://shop.example.com?"}],
-    tools=[{"type": "function", "function": QUERY_SCHEMA}],
-)
-
-args = json.loads(response.choices[0].message.tool_calls[0].function.arguments)
-result = query_page_elements(**args)
-# result["results"] → {"price": [{"text": "$29.99"}], ...}
-# result["dom_index"] → headings, tables, code, lists, images, key_values, sections, forms
-```
-
-#### `query_page_elements()` parameters
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `url` | `str` | **required** | Page URL |
-| `queries` | `dict` | **required** | `{label: css_selector}` — each returns up to 50 matched elements |
-| `attributes` | `list[str]` | `[]` | HTML attributes to include alongside text (e.g. `["href","src"]`) |
-| `render_js` | `bool` | `True` | Use Playwright for SPA pages |
-| `include_dom_index` | `bool` | `True` | Include pre-built semantic DOM index in result |
-| `wait_for_selector` | `str` | `""` | CSS selector to wait for before DOM snapshot |
-| `wait_for_timeout` | `float` | `10.0` | Max seconds to wait for `wait_for_selector` |
-
-```python
-# Direct Python usage
-from tools import query_page_elements
-
-result = query_page_elements(
-    url="https://shop.example.com/product/123",
-    queries={
-        "price":   ".product-price",
-        "title":   "h1",
-        "reviews": ".review-text",
-        "images":  "img.product-img",
-    },
-    attributes=["href", "src", "data-id"],
-    wait_for_selector=".product-price",  # wait for async content
-    wait_for_timeout=10.0,
-)
-
-result["results"]   # {"price": [{"text": "$29.99"}], "title": [{"text": "Acme Widget"}], ...}
-result["dom_index"] # headings, tables, code, lists, images, key_values, sections, forms
-result["page_metrics"]  # load_time_ms, dom_nodes, etc.
-```
-
----
-
-## DOM Index
-
-Every Playwright fetch automatically builds a `dom_index` — a semantic snapshot of the page structure. It is available in `browser_context["dom_index"]` and in every `query_page_elements()` result.
-
-| Key | Description |
-|---|---|
-| `headings` | All h1–h6: `{level, text, id, href}` |
-| `tables` | Headers + rows (up to 10 rows/table, 20 tables) |
-| `code` | `pre`/`code` blocks with detected language |
-| `lists` | `ul`/`ol` items (up to 20 items/list, 25 lists) |
-| `images` | `{src, alt, width}` for all `<img>` |
-| `key_values` | `<dl>` definition list pairs `{key, value}` |
-| `sections` | Heading + 200-char preview of following content |
-| `forms` | `{action, method, inputs[]}` for each `<form>` |
-
-Because the DOM changes as SPAs render data, use `wait_for_selector` to ensure the snapshot is taken **after** the relevant content has appeared:
-
-```python
-from tools.pipeline import BrowserPipeline
-
-pipeline = BrowserPipeline(
-    wait_for_selector="table.results tbody tr",  # wait for data table to populate
-    wait_for_timeout=8.0,
-)
-result = pipeline.run("https://example.com/search?q=python")
-print(result.browser_context["dom_index"]["tables"])
-```
+See [API-docs.md → LLM Tool Calling](API-docs.md#llm-tool-calling) for complete examples.
 
 ---
 
@@ -417,26 +214,7 @@ Every note includes a `## 🖱️ Interactive Elements` section with CSS selecto
 
 ## Optional: LLM Summarisation
 
-Pre-summarise content with a small local model before passing to your main LLM:
-
-```python
-from tools.pipeline import BrowserPipeline
-
-pipeline = BrowserPipeline(
-    render_js=True,
-    summarize=True,
-    summarizer_provider="ollama",
-    summarizer_model="llama3.2:3b",
-    max_summary_words=300,
-)
-result = pipeline.run("https://example.com")
-print(result.summary.summary)
-```
-
-| Provider | Value | Notes |
-|---|---|---|
-| Ollama (local) | `"ollama"` | Default — `http://localhost:11434` |
-| OpenAI-compatible | `"openai"` | Set `api_key` and `base_url` |
+Pre-summarise content with a small local model (Ollama / OpenAI-compatible) before passing to your main LLM. See [API-docs.md → LLM Summarisation](API-docs.md#llm-summarisation) for configuration details.
 
 ---
 
