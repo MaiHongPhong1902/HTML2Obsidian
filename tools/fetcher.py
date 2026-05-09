@@ -61,6 +61,11 @@ class FetchResult:
     frames: list[dict] = None              # Same-origin frames: [{"url", "html"}]
     spa_framework: str = "static"          # static | react | vue | angular | next.js | nuxt
     has_shadow_dom: bool = False           # True if shadow DOM detected
+    network_requests: list = field(default_factory=list)   # [{url, method, status, content_type}] — XHR/fetch
+    page_metrics: dict = field(default_factory=dict)       # {load_time_ms, dom_nodes, images, scripts, links}
+    embedded_json: dict = field(default_factory=dict)      # window globals (__NEXT_DATA__, __NUXT__, etc.)
+    json_ld: list = field(default_factory=list)            # JSON-LD from <script type="application/ld+json">
+    lazy_images_resolved: int = 0                          # count of lazy images resolved
 
     def __post_init__(self):
         if self.frames is None:
@@ -86,12 +91,14 @@ class PageFetcher:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
         browser_profile: Optional[str] = None,
+        capture_network: bool = False,        # capture XHR/fetch requests during page load
     ):
         self.timeout = timeout
         self.wait_until = wait_until
         self.viewport = viewport or {"width": 1280, "height": 800}
         self.user_agent = user_agent
         self.browser_profile = self._resolve_profile(browser_profile)
+        self.capture_network = capture_network
 
     @staticmethod
     def _resolve_profile(profile: Optional[str]) -> Optional[str]:
@@ -189,6 +196,22 @@ class PageFetcher:
                     )
                 page = await context.new_page()
 
+                # --- Network request capture ---
+                network_reqs: list[dict] = []
+                if self.capture_network:
+                    def _on_response(response) -> None:
+                        try:
+                            if response.request.resource_type in ("xhr", "fetch"):
+                                network_reqs.append({
+                                    "url": response.url,
+                                    "method": response.request.method,
+                                    "status": response.status,
+                                    "content_type": response.headers.get("content-type", ""),
+                                })
+                        except Exception:
+                            pass
+                    page.on("response", _on_response)
+
                 response = await page.goto(
                     url,
                     timeout=self.timeout * 1000,
@@ -207,6 +230,103 @@ class PageFetcher:
                     html = await page.content()  # re-fetch after SPA render
                 except Exception:
                     pass  # timeout OK — use current html
+
+                # --- Browser context extraction ---
+
+                # 1. Resolve lazy images (data-src → src) before snapshotting HTML
+                lazy_resolved: int = 0
+                try:
+                    lazy_resolved = await page.evaluate("""
+                    () => {
+                        let count = 0;
+                        const lazyAttrs = [
+                            'data-src','data-lazy-src','data-original',
+                            'data-lazy','data-srcset','data-bg'
+                        ];
+                        document.querySelectorAll('img, [data-bg]').forEach(el => {
+                            for (const attr of lazyAttrs) {
+                                const val = el.getAttribute(attr);
+                                if (val && (val.startsWith('http') || val.startsWith('/'))
+                                        && el.tagName === 'IMG' && !el.src.startsWith('http')) {
+                                    el.src = val;
+                                    count++;
+                                    break;
+                                }
+                            }
+                        });
+                        // Also resolve background-image lazy patterns
+                        document.querySelectorAll('[data-bg]').forEach(el => {
+                            const val = el.getAttribute('data-bg');
+                            if (val) {
+                                el.style.backgroundImage = `url('${val}')`;
+                                count++;
+                            }
+                        });
+                        return count;
+                    }
+                    """) or 0
+                    if lazy_resolved:
+                        html = await page.content()
+                except Exception:
+                    pass
+
+                # 2. Page performance metrics
+                page_metrics: dict = {}
+                try:
+                    page_metrics = await page.evaluate("""
+                    () => {
+                        try {
+                            const nav = (performance.getEntriesByType('navigation') || [])[0] || {};
+                            return {
+                                load_time_ms: Math.round(nav.loadEventEnd || 0),
+                                dom_content_loaded_ms: Math.round(nav.domContentLoadedEventEnd || 0),
+                                dom_nodes: document.querySelectorAll('*').length,
+                                images: document.images.length,
+                                scripts: document.scripts.length,
+                                links: document.links.length,
+                            };
+                        } catch(e) { return {}; }
+                    }
+                    """) or {}
+                except Exception:
+                    pass
+
+                # 3. Embedded JSON globals (SSR data: __NEXT_DATA__, __NUXT__, etc.)
+                embedded_json: dict = {}
+                try:
+                    embedded_json = await page.evaluate("""
+                    () => {
+                        const keys = [
+                            '__NEXT_DATA__','__NUXT__','__INITIAL_STATE__',
+                            '__APP_STATE__','__PRELOADED_STATE__','__REDUX_STATE__',
+                            'initialData','__data__','__STORE__','__APOLLO_STATE__'
+                        ];
+                        const result = {};
+                        for (const k of keys) {
+                            try {
+                                if (window[k] !== undefined)
+                                    result[k] = JSON.parse(JSON.stringify(window[k]));
+                            } catch(e) {}
+                        }
+                        return result;
+                    }
+                    """) or {}
+                except Exception:
+                    pass
+
+                # 4. JSON-LD structured data
+                json_ld: list = []
+                try:
+                    json_ld = await page.evaluate("""
+                    () => Array.from(
+                        document.querySelectorAll('script[type="application/ld+json"]')
+                    ).map(s => {
+                        try { return JSON.parse(s.textContent); }
+                        catch(e) { return null; }
+                    }).filter(Boolean)
+                    """) or []
+                except Exception:
+                    pass
 
                 # SPA framework detection + shadow DOM
                 spa_info = await page.evaluate("""
@@ -312,6 +432,11 @@ class PageFetcher:
                     frames=frames_data,
                     spa_framework=spa_framework,
                     has_shadow_dom=has_shadow_dom,
+                    network_requests=network_reqs,
+                    page_metrics=page_metrics,
+                    embedded_json=embedded_json,
+                    json_ld=json_ld,
+                    lazy_images_resolved=lazy_resolved,
                 )
         except Exception as exc:
             return FetchResult(url=url, html="", status_code=0, error=str(exc))
@@ -411,12 +536,28 @@ class PageFetcher:
 
     @staticmethod
     async def _scroll_to_bottom(page) -> None:
-        """Scroll to bottom to trigger lazy-load."""
-        prev_height = 0
-        for _ in range(10):
-            height = await page.evaluate("document.body.scrollHeight")
-            if height == prev_height:
+        """Scroll incrementally by viewport height to trigger lazy-load correctly."""
+        try:
+            viewport_h: int = await page.evaluate("window.innerHeight") or 800
+        except Exception:
+            viewport_h = 800
+
+        pos = 0
+        for _ in range(40):
+            try:
+                total = await page.evaluate("document.body.scrollHeight") or 0
+                if pos >= total:
+                    break
+                pos = min(pos + viewport_h, total)
+                await page.evaluate(f"window.scrollTo(0, {pos})")
+                await asyncio.sleep(0.3)
+            except Exception:
                 break
-            prev_height = height
+
+        # Scroll back to top then to bottom — triggers any remaining lazy-loads
+        try:
+            await page.evaluate("window.scrollTo(0, 0)")
+            await asyncio.sleep(0.15)
             await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-            await asyncio.sleep(0.8)
+        except Exception:
+            pass

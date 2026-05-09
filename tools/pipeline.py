@@ -37,6 +37,9 @@ class PipelineResult:
     # Summary
     summary: Optional[SummaryResult] = None
 
+    # Browser context (network, metrics, embedded JSON, JSON-LD)
+    browser_context: Optional[dict] = None
+
     # ----------------------------------------------------------------
     # Utility: export as a single complete Markdown for agent
     # ----------------------------------------------------------------
@@ -100,6 +103,7 @@ class BrowserPipeline:
         scroll_to_bottom: bool = False,
         timeout: float = 30.0,
         browser_profile: Optional[str] = None,
+        capture_network: bool = False,         # capture XHR/fetch requests for browser_context
         # Summarize options
         summarize: bool = False,
         summarizer_provider: str = "ollama",
@@ -114,7 +118,11 @@ class BrowserPipeline:
         self.scroll_to_bottom = scroll_to_bottom
         self.summarize = summarize
 
-        self._fetcher = PageFetcher(timeout=timeout, browser_profile=browser_profile)
+        self._fetcher = PageFetcher(
+            timeout=timeout,
+            browser_profile=browser_profile,
+            capture_network=capture_network,
+        )
         self._extractor = PageExtractor()
         self._cleaner = PageCleaner()
         self._summarizer = PageSummarizer(
@@ -147,6 +155,21 @@ class BrowserPipeline:
         result.fetch_error = fetch.error
         result.screenshot_b64 = fetch.screenshot_b64
         result._html = fetch.html or ""   # keep raw HTML for domain extractors
+
+        # Aggregate browser context from fetch result
+        ctx: dict = {}
+        if fetch.network_requests:
+            ctx["network_requests"] = fetch.network_requests
+        if fetch.page_metrics:
+            ctx["page_metrics"] = fetch.page_metrics
+        if fetch.embedded_json:
+            ctx["embedded_json"] = fetch.embedded_json
+        if fetch.json_ld:
+            ctx["json_ld"] = fetch.json_ld
+        if fetch.lazy_images_resolved:
+            ctx["lazy_images_resolved"] = fetch.lazy_images_resolved
+        ctx["spa_framework"] = fetch.spa_framework
+        result.browser_context = ctx
 
         if fetch.error or not fetch.html:
             return result

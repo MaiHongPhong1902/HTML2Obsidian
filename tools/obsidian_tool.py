@@ -249,6 +249,11 @@ TOOL_SCHEMA = {
                 },
                 "default": {},
             },
+            "capture_network": {
+                "type": "boolean",
+                "description": "Capture XHR/fetch network requests made during page load. Results appear in browser_context.network_requests.",
+                "default": False,
+            },
         },
         "required": ["url"],
     },
@@ -275,6 +280,7 @@ def create_obsidian_note(
     site_map_max_internal_links: int = 120,
     site_map_max_external_links: int = 30,
     llm_config: Optional[dict] = None,
+    capture_network: bool = False,            # capture XHR/fetch requests in browser_context
 ) -> dict:
     """
     Create an Obsidian note from a URL.
@@ -288,6 +294,7 @@ def create_obsidian_note(
             site_map (str) — dedicated site map / tree map note content
             structured_data (dict | None) — LLM-readable structured snapshot of the page
             applied_llm_config (dict) — accepted/rejected LLM-safe edits
+            browser_context (dict) — spa_framework, page_metrics, network_requests, embedded_json, json_ld
             path     (str)   — saved file path (empty if not saved)
             site_map_path (str) — saved site map path (empty if not saved)
             url      (str)   — original URL
@@ -309,6 +316,7 @@ def create_obsidian_note(
             "site_map": "",
             "structured_data": None,
             "applied_llm_config": {"accepted": [], "rejected": [str(exc)]},
+            "browser_context": None,
             "path": "",
             "site_map_path": "",
             "url": url,
@@ -319,7 +327,11 @@ def create_obsidian_note(
 
     requested_title = normalized_llm["edit"]["title"] or note_title or None
 
-    pipeline = BrowserPipeline(render_js=render_js, browser_profile=browser_profile)
+    pipeline = BrowserPipeline(
+        render_js=render_js,
+        browser_profile=browser_profile,
+        capture_network=capture_network,
+    )
     result = pipeline.run(url)
 
     if result.fetch_error:
@@ -331,6 +343,7 @@ def create_obsidian_note(
             "site_map": "",
             "structured_data": None,
             "applied_llm_config": {"accepted": [], "rejected": []},
+            "browser_context": result.browser_context,
             "path": "",
             "site_map_path": "",
             "url": url,
@@ -357,6 +370,7 @@ def create_obsidian_note(
             "site_map": "",
             "structured_data": None,
             "applied_llm_config": {"accepted": [], "rejected": [str(exc)]},
+            "browser_context": result.browser_context,
             "path": "",
             "site_map_path": "",
             "url": url,
@@ -431,6 +445,7 @@ def create_obsidian_note(
             "site_map": site_map_content,
             "structured_data": _build_structured_data(result, None, normalized_llm["structured_data_limit"]) if normalized_llm["include_structured_data"] else None,
             "applied_llm_config": llm_state,
+            "browser_context": result.browser_context,
             "path": str(Path(vault_path) / _safe_filename(title)) if vault_path else "",
             "site_map_path": site_map_path,
             "paths": saved_paths,
@@ -488,6 +503,7 @@ def create_obsidian_note(
         "site_map": site_map_content,
         "structured_data": _build_structured_data(result, note, normalized_llm["structured_data_limit"]) if normalized_llm["include_structured_data"] else None,
         "applied_llm_config": llm_state,
+        "browser_context": result.browser_context,
         "path": saved_path,
         "site_map_path": site_map_path,
         "url": url,
