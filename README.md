@@ -1,20 +1,22 @@
-# Browser → Obsidian Tool
+﻿# HTML2Obsidian
 
-A self-contained Python package that fetches any URL and produces a structured [Obsidian](https://obsidian.md/) Markdown note — ready for LLM tool calling.
+Fetch any URL and produce structured [Obsidian](https://obsidian.md/) Markdown notes — ready for LLM tool calling and knowledge-graph building.
 
 ---
 
 ## Features
 
-- **YAML frontmatter** — title, url, tags, entities, date
-- **[[WikiLinks]]** — auto-extracted named entities linked as Obsidian internal links
-- **Relationships & References** — backlinks, outbound links, images, iframes
-- **🖱️ Interactive Elements** — buttons, inputs, forms, nav links with CSS selectors for agent use
-- **SPA support** — Playwright renders React / Vue / Next.js pages before extraction
-- **YouTube** — channel, views, likes, duration, description, related videos (no API key)
-- **Wikipedia / arXiv / GitHub** — metadata-aware extraction
-- **Browser profile** — reuse Chrome/Edge/Firefox cookies and login sessions
-- **Optional summarisation** — small LLM (Ollama / OpenAI-compatible) pre-summarises content before the main LLM sees it
+| | |
+|---|---|
+| **YAML frontmatter** | title, url, domain, tags, entities, date |
+| **[[WikiLinks]]** | auto-extracted named entities as Obsidian graph nodes |
+| **🏗️ Page Structure** | layout sections table (`<header>`, `<nav>`, `<main>`, …) |
+| **🖱️ Interactive Elements** | buttons, inputs, forms, nav links with CSS selectors |
+| **📑 Split-note mode** | one `.md` per page region in `vault/{Title}/` subfolder |
+| **SPA support** | Playwright renders React / Vue / Next.js before extraction |
+| **YouTube** | channel, views, likes, duration, related videos — no API key |
+| **Browser profile** | reuse Chrome / Edge / Firefox cookies and login sessions |
+| **LLM summarisation** | optional small-model pre-summary (Ollama / OpenAI-compatible) |
 
 ---
 
@@ -23,21 +25,91 @@ A self-contained Python package that fetches any URL and produces a structured [
 ```bash
 pip install -r requirements.txt
 
-# Install Playwright browsers (only needed when render_js=True)
+# Playwright browsers (only needed when render_js=True)
 playwright install chromium
 
-# Optional: spaCy NER model for richer WikiLinks
+# Optional: spaCy NER for richer WikiLinks
 python -m spacy download en_core_web_sm
 ```
 
 ---
 
-## Quick Start
+## CLI
+
+```bash
+# Static page (fast, no browser)
+python note.py --vault ./vault --no-js https://en.wikipedia.org/wiki/Python
+
+# JS-rendered SPA
+python note.py --vault ./vault https://github.com/owner/repo
+
+# Split into sub-notes per page section
+python note.py --vault ./vault --split https://docs.github.com/en
+
+# Reuse browser profile (logged-in cookies)
+python note.py --vault ./vault --profile chrome https://mail.google.com
+
+# Custom title + extra tags
+python note.py --vault ./vault --title "My Note" --tags research ai https://example.com
+
+# YouTube video
+python note.py --vault ./vault "https://www.youtube.com/watch?v=VIDEO_ID"
+
+# Print to stdout (no vault)
+python note.py https://example.com
+```
+
+### CLI Reference
+
+| Argument | Description |
+|---|---|
+| `url` | URL to fetch (positional, last) |
+| `-o`, `--vault DIR` | Obsidian vault directory. Omit to print to stdout |
+| `-t`, `--title TITLE` | Custom note title (auto-detected if omitted) |
+| `--no-js` | Skip Playwright — faster for static pages |
+| `--tags TAG …` | Extra frontmatter tags |
+| `--profile PROFILE` | Browser profile: `chrome` \| `edge` \| `firefox` \| `/abs/path` |
+| `--split` | Split note into sub-notes by page section |
+
+---
+
+## Split-note mode
+
+`--split` saves multiple linked files into `vault/{Title}/` instead of a single flat note:
+
+```
+vault/
+└── GitHub Docs/
+    ├── GitHub Docs.md                        ← index + relationships
+    ├── GitHub Docs - Navigation.md           ← <nav> section
+    ├── GitHub Docs - Main.md                 ← <main> section (full content)
+    ├── GitHub Docs - Footer.md               ← <footer> section
+    └── GitHub Docs - Interactive Elements.md ← all buttons / inputs / forms
+```
+
+File names follow `{Title} - {Section}` so WikiLinks are **unique across the entire vault** — even when multiple sites share section names like "Navigation" or "Footer".
+
+Sub-notes link back to their parent:
+
+```yaml
+---
+title: GitHub Docs - Navigation
+parent: "[[GitHub Docs]]"
+section_tag: nav
+page: "https://docs.github.com/en"
+tags:
+  - web-section
+---
+```
+
+---
+
+## Python API
 
 ```python
 from tools import create_obsidian_note, TOOL_SCHEMA
 
-# Returns a dict — no file saved
+# Single note returned as string
 result = create_obsidian_note(url="https://en.wikipedia.org/wiki/Obsidian")
 print(result["content"])
 
@@ -47,32 +119,52 @@ result = create_obsidian_note(
     vault_path="./my-vault",
 )
 print(result["path"])   # ./my-vault/Obsidian.md
+
+# Split-note mode
+result = create_obsidian_note(
+    url="https://docs.github.com/en",
+    vault_path="./my-vault",
+    split_sections=True,
+)
+print(result["path"])   # ./my-vault/GitHub Docs/
+print(result["paths"])  # list of all saved .md files
 ```
 
-### CLI
+### Parameters
 
-```bash
-# Static page (fast)
-python note.py --vault ./vault --no-js https://en.wikipedia.org/wiki/Python
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `url` | `str` | **required** | Page URL |
+| `vault_path` | `str` | `""` | Vault directory. Empty = return content only |
+| `note_title` | `str` | `""` | Custom title. Empty = auto-detect from page |
+| `render_js` | `bool` | `True` | Use Playwright for JS rendering |
+| `extra_tags` | `list[str]` | `[]` | Additional frontmatter tags |
+| `from_url` | `str` | `""` | Source URL for backlink |
+| `from_title` | `str` | `""` | Title of the source page |
+| `browser_profile` | `str` | `""` | Browser profile shortcut or absolute path |
+| `split_sections` | `bool` | `False` | Split into sub-notes per page section |
 
-# SPA / JS-rendered page
-python note.py --vault ./vault https://github.com/owner/repo
+### Return value
 
-# YouTube video
-python note.py --vault ./vault "https://www.youtube.com/watch?v=VIDEO_ID"
-
-# Reuse browser profile (logged-in cookies)
-python note.py --vault ./vault --profile chrome https://mail.google.com
-
-# Custom title and extra tags
-python note.py --vault ./vault --title "My Note" --tags research ai https://example.com
+```python
+{
+    "success":  bool,
+    "title":    str,         # note title
+    "content":  str,         # Markdown of index/main note
+    "path":     str,         # saved file path or folder (split mode)
+    "paths":    list[str],   # all saved files (split mode only)
+    "url":      str,
+    "tags":     list[str],
+    "entities": list[str],
+    "error":    str | None,
+}
 ```
 
 ---
 
 ## LLM Tool Calling
 
-Pass `TOOL_SCHEMA` directly to any OpenAI-compatible API:
+`TOOL_SCHEMA` is OpenAI / Anthropic / Ollama compatible:
 
 ```python
 from tools import TOOL_SCHEMA
@@ -84,64 +176,28 @@ response = client.chat.completions.create(
     messages=[{"role": "user", "content": "Summarise https://arxiv.org/abs/2307.09288 as an Obsidian note"}],
     tools=[{"type": "function", "function": TOOL_SCHEMA}],
 )
-```
 
-When the model calls the tool, execute it:
-
-```python
+# Execute the tool call
 import json
 from tools import create_obsidian_note
 
-tool_call = response.choices[0].message.tool_calls[0]
-args = json.loads(tool_call.function.arguments)
+args = json.loads(response.choices[0].message.tool_calls[0].function.arguments)
 result = create_obsidian_note(**args)
-```
-
----
-
-## `create_obsidian_note()` Parameters
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `url` | `str` | **required** | Page URL (must start with `http/https`) |
-| `vault_path` | `str` | `""` | Obsidian vault directory. Empty = return content only, no file saved |
-| `note_title` | `str` | `""` | Custom title. Empty = auto-detect from page |
-| `render_js` | `bool` | `True` | Use Playwright to render JavaScript. Set `False` for faster static pages |
-| `extra_tags` | `list[str]` | `[]` | Additional frontmatter tags |
-| `from_url` | `str` | `""` | Source URL for backlink (if navigated from another page) |
-| `from_title` | `str` | `""` | Title of the source page |
-| `browser_profile` | `str` | `""` | Reuse browser profile for cookies/sessions. Shortcuts: `chrome`, `edge`, `firefox`, or absolute path |
-
-### Return value
-
-```python
-{
-    "success":  bool,
-    "title":    str,        # note title
-    "content":  str,        # full Markdown with frontmatter
-    "path":     str,        # saved file path (empty if not saved)
-    "url":      str,        # original URL
-    "tags":     list[str],  # assigned tags
-    "entities": list[str],  # extracted WikiLink entities
-    "error":    str | None, # error message if failed
-}
 ```
 
 ---
 
 ## Browser Profile (Authenticated Pages)
 
-Reuse an existing browser profile so the tool can access pages that require login:
+Reuse an existing browser so the tool can access login-required pages:
 
 ```python
 result = create_obsidian_note(
-    url="https://mail.google.com",
+    url="https://github.com/notifications",
     vault_path="./vault",
-    browser_profile="chrome",   # shortcut
+    browser_profile="chrome",
 )
 ```
-
-Supported shortcuts (Windows paths resolved automatically):
 
 | Shortcut | Profile directory |
 |---|---|
@@ -150,38 +206,38 @@ Supported shortcuts (Windows paths resolved automatically):
 | `edge` | `%LOCALAPPDATA%\Microsoft\Edge\User Data` |
 | `firefox` | `%APPDATA%\Mozilla\Firefox\Profiles\*.default*` |
 
-Or pass an absolute path to any Chromium-based user-data directory.
+Or pass an absolute path to any Chromium user-data directory.
 
-> **Note:** Chrome/Edge must be fully closed before running, since only one process can lock a profile at a time.
+> **Note:** Close Chrome / Edge before running — only one process can hold a profile lock at a time.
 
 ---
 
 ## Interactive Elements
 
-Every note includes a `## 🖱️ Interactive Elements` section with tables of buttons, inputs, and nav links — each with a ready-to-use CSS selector:
+Every note includes a `## 🖱️ Interactive Elements` section with CSS selectors ready for Playwright automation:
 
 ```markdown
-## 🖱️ Interactive Elements
+**Navigation links:**
+| Label | href | selector |
+|-------|------|----------|
+| [[Explore]] | `/explore` | `nav a[href="/explore"]` |
 
 **Buttons:**
 | Label | tag | type | id | selector |
 |-------|-----|------|----|----------|
-| Đăng ký | `button` | `button` | `—` | `button[aria-label="Đăng ký TheAnh96."].ytSpecButtonShape` |
-| Chia sẻ | `button` | `button` | `—` | `button[aria-label="Chia sẻ"].ytSpecButtonShape` |
+| [[Sign up]] | `a` | `—` | `—` | `a[href="/signup"].btn` |
 
 **Input fields:**
-| type | name / id | placeholder | aria-label | selector |
-|------|-----------|-------------|------------|----------|
-| `text` | `search_query` | Tìm kiếm | — | `input[name="search_query"][type="text"]` |
+| type | name / id | placeholder | required | selector |
+|------|-----------|-------------|----------|----------|
+| `text` | `q` | Search | | `input[name="q"][type="text"]` |
 ```
-
-An agent can use these selectors directly with Playwright to click, type, or navigate.
 
 ---
 
-## Optional: Summarisation
+## Optional: LLM Summarisation
 
-Pre-summarise page content with a small local model before passing to your main LLM:
+Pre-summarise content with a small local model before passing to your main LLM:
 
 ```python
 from tools.pipeline import BrowserPipeline
@@ -189,20 +245,18 @@ from tools.pipeline import BrowserPipeline
 pipeline = BrowserPipeline(
     render_js=True,
     summarize=True,
-    summarizer_provider="ollama",   # or "openai"
+    summarizer_provider="ollama",
     summarizer_model="llama3.2:3b",
     max_summary_words=300,
 )
 result = pipeline.run("https://example.com")
-print(result.summary)
+print(result.summary.summary)
 ```
-
-Supported providers:
 
 | Provider | Value | Notes |
 |---|---|---|
 | Ollama (local) | `"ollama"` | Default — `http://localhost:11434` |
-| OpenAI-compatible | `"openai"` | Pass `api_key` and `base_url` |
+| OpenAI-compatible | `"openai"` | Set `api_key` and `base_url` |
 
 ---
 
@@ -211,207 +265,23 @@ Supported providers:
 ```
 tools/
 ├── __init__.py            # Exports: create_obsidian_note, TOOL_SCHEMA, ObsidianNote
-├── obsidian_tool.py       # Main tool function + TOOL_SCHEMA
-├── obsidian_formatter.py  # PipelineResult → ObsidianNote (frontmatter, WikiLinks, …)
-├── pipeline.py            # Orchestrates fetch → extract → clean → summarize
-├── fetcher.py             # HTTP fetching: Playwright (JS/profile) or httpx (static)
-├── extractor.py           # Metadata, links, images, iframes, layout, interactive elements
-│                          # Also contains: YouTubeExtractor (no API key)
-├── cleaner.py             # HTML → clean Markdown (markitdown / trafilatura / BS4)
+├── obsidian_tool.py       # Tool entry point + TOOL_SCHEMA
+├── obsidian_formatter.py  # PipelineResult → ObsidianNote / split sub-notes
+├── pipeline.py            # fetch → extract → clean → summarize
+├── fetcher.py             # Playwright (JS / profile) or httpx (static)
+├── extractor.py           # Layout, interactive elements, metadata, links, YouTubeExtractor
+├── cleaner.py             # HTML → clean Markdown
 └── summarizer.py          # Optional small-LLM pre-summarisation
 ```
 
 ---
 
-## CLI Reference
-
-```
-usage: note.py [-o DIR] [-t TITLE] [--no-js] [--tags ...] [--profile PROFILE] url
-
-positional arguments:
-  url                   URL to fetch
-
-options:
-  -o, --vault DIR       Obsidian vault directory (default: print to stdout)
-  -t, --title TITLE     Custom note title
-  --no-js               Skip JS rendering (faster, for static pages)
-  --tags TAG [TAG ...]  Extra frontmatter tags
-  --profile PROFILE     Browser profile: chrome | edge | firefox | /abs/path
-```
-
----
-
 ## Dependencies
 
 | Library | Purpose |
 |---|---|
-| `httpx` | Fast static HTTP fetching |
-| `playwright` | JS rendering + browser profile support |
-| `beautifulsoup4` + `lxml` | HTML parsing |
-| `trafilatura` | Main article extraction |
-| `markitdown` | HTML / PDF / DOCX → Markdown |
-| `spacy` *(optional)* | NER for richer WikiLinks |
-
-
-A self-contained Python package that fetches any URL and produces a structured [Obsidian](https://obsidian.md/) Markdown note — ready for LLM tool calling.
-
----
-
-## Features
-
-- **YAML frontmatter** — title, url, tags, entities, date
-- **[[WikiLinks]]** — auto-extracted named entities linked as Obsidian internal links
-- **Relationships & References** — backlinks, outbound links, images, iframes
-- **SPA support** — Playwright renders React / Vue / Next.js pages before extraction
-- **YouTube** — channel, views, likes, duration, description, related videos (no API key)
-- **Wikipedia / arXiv / GitHub** — metadata-aware extraction
-- **Optional summarisation** — small LLM (Ollama / OpenAI-compatible) pre-summarises content before the main LLM sees it
-
----
-
-## Installation
-
-```bash
-pip install -r requirements.txt
-
-# Install Playwright browsers (only needed when render_js=True)
-playwright install chromium
-
-# Optional: spaCy NER model for richer WikiLinks
-python -m spacy download en_core_web_sm
-```
-
----
-
-## Quick Start
-
-```python
-from tools import create_obsidian_note, TOOL_SCHEMA
-
-# Returns a dict — no file saved
-result = create_obsidian_note(url="https://en.wikipedia.org/wiki/Obsidian")
-print(result["content"])
-
-# Save to vault
-result = create_obsidian_note(
-    url="https://en.wikipedia.org/wiki/Obsidian",
-    vault_path="./my-vault",
-)
-print(result["path"])   # ./my-vault/Obsidian.md
-```
-
----
-
-## LLM Tool Calling
-
-Pass `TOOL_SCHEMA` directly to any OpenAI-compatible API:
-
-```python
-from tools import TOOL_SCHEMA
-import openai
-
-client = openai.OpenAI()
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Summarise https://arxiv.org/abs/2307.09288 as an Obsidian note"}],
-    tools=[{"type": "function", "function": TOOL_SCHEMA}],
-)
-```
-
-When the model calls the tool, execute it:
-
-```python
-import json
-from tools import create_obsidian_note
-
-tool_call = response.choices[0].message.tool_calls[0]
-args = json.loads(tool_call.function.arguments)
-result = create_obsidian_note(**args)
-```
-
----
-
-## `create_obsidian_note()` Parameters
-
-| Parameter | Type | Default | Description |
-|---|---|---|---|
-| `url` | `str` | **required** | Page URL (must start with `http/https`) |
-| `vault_path` | `str` | `""` | Obsidian vault directory. Empty = return content only, no file saved |
-| `note_title` | `str` | `""` | Custom title. Empty = auto-detect from page |
-| `render_js` | `bool` | `True` | Use Playwright to render JavaScript. Set `False` for faster static pages |
-| `extra_tags` | `list[str]` | `[]` | Additional frontmatter tags |
-| `from_url` | `str` | `""` | Source URL for backlink (if navigated from another page) |
-| `from_title` | `str` | `""` | Title of the source page |
-
-### Return value
-
-```python
-{
-    "success":  bool,
-    "title":    str,        # note title
-    "content":  str,        # full Markdown with frontmatter
-    "path":     str,        # saved file path (empty if not saved)
-    "url":      str,        # original URL
-    "tags":     list[str],  # assigned tags
-    "entities": list[str],  # extracted WikiLink entities
-    "error":    str | None, # error message if failed
-}
-```
-
----
-
-## Optional: Summarisation
-
-Pre-summarise page content with a small local model before passing to your main LLM:
-
-```python
-from tools.summarizer import PageSummarizer
-from tools.pipeline import BrowserPipeline
-
-pipeline = BrowserPipeline(
-    render_js=True,
-    summarizer=PageSummarizer(
-        provider="ollama",   # or "openai"
-        model="llama3.2:3b",
-        max_words=300,
-    ),
-)
-result = pipeline.run("https://example.com")
-print(result.summary)
-```
-
-Supported providers:
-
-| Provider | Value | Notes |
-|---|---|---|
-| Ollama (local) | `"ollama"` | Default — `http://localhost:11434` |
-| OpenAI-compatible | `"openai"` | Pass `api_key` and `base_url` |
-
----
-
-## Package Structure
-
-```
-tools/
-├── __init__.py            # Exports: create_obsidian_note, TOOL_SCHEMA, ObsidianNote
-├── obsidian_tool.py       # Main tool function + TOOL_SCHEMA
-├── obsidian_formatter.py  # PipelineResult → ObsidianNote (frontmatter, WikiLinks, …)
-├── pipeline.py            # Orchestrates fetch → extract → clean → summarize
-├── fetcher.py             # HTTP fetching: Playwright (JS) or httpx (static)
-├── extractor.py           # Metadata, links, images, iframes, layout
-├── cleaner.py             # HTML → clean Markdown (markitdown / trafilatura / BS4)
-├── summarizer.py          # Optional small-LLM pre-summarisation
-└── youtube_extractor.py   # YouTube metadata without API key
-```
-
----
-
-## Dependencies
-
-| Library | Purpose |
-|---|---|
-| `httpx` | Fast static HTTP fetching |
-| `playwright` | JS rendering for SPA pages |
+| `httpx` | Static HTTP fetching |
+| `playwright` | JS rendering + browser profile |
 | `beautifulsoup4` + `lxml` | HTML parsing |
 | `trafilatura` | Main article extraction |
 | `markitdown` | HTML / PDF / DOCX → Markdown |
