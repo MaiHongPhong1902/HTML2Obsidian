@@ -867,3 +867,149 @@ def _build_structured_data(result, note, limit: int) -> dict:
         },
     }
     return structured
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# query_page_elements — targeted CSS selector queries for LLM element access
+# ──────────────────────────────────────────────────────────────────────────────
+
+QUERY_SCHEMA = {
+    "name": "query_page_elements",
+    "description": (
+        "Open a URL and run CSS selector queries to extract specific elements. "
+        "Returns matched elements as text and optional attributes. "
+        "Use this when you know what element you need (e.g. price, title, table, code block). "
+        "Also returns a pre-built dom_index with headings, tables, code, lists, images, and key-values."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "Full URL of the page to query (must start with http/https).",
+            },
+            "queries": {
+                "type": "object",
+                "description": (
+                    "Dict mapping label → CSS selector. "
+                    "Example: {\"price\": \".product-price\", \"title\": \"h1\", \"rows\": \"table tr\"}. "
+                    "Each selector returns up to 50 matching elements."
+                ),
+                "additionalProperties": {"type": "string"},
+            },
+            "attributes": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "HTML attributes to include alongside text. E.g. [\"href\",\"src\",\"data-id\"]. Default: [].",
+                "default": [],
+            },
+            "render_js": {
+                "type": "boolean",
+                "description": "Use Playwright for JS-rendered pages. Default true.",
+                "default": True,
+            },
+            "include_dom_index": {
+                "type": "boolean",
+                "description": "Also return the full pre-built semantic DOM index (headings, tables, code, lists, images, key_values). Default true.",
+                "default": True,
+            },
+        },
+        "required": ["url", "queries"],
+    },
+}
+
+
+def query_page_elements(
+    url: str,
+    queries: dict[str, str],
+    attributes: list[str] | None = None,
+    render_js: bool = True,
+    include_dom_index: bool = True,
+) -> dict:
+    """
+    Open a URL and run CSS selector queries to extract specific elements.
+
+    Parameters:
+        url (str)           — page URL
+        queries (dict)      — {label: css_selector} — each returns up to 50 matched elements
+        attributes (list)   — HTML attributes to include alongside text (e.g. ["href","src"])
+        render_js (bool)    — use Playwright for SPA pages (default True)
+        include_dom_index   — include pre-built semantic DOM index in result
+
+    Returns:
+        dict:
+            success  (bool)
+            url      (str)
+            results  (dict)  — {label: [{text, attrs}]}  for each query
+            dom_index (dict) — headings, tables, code, lists, images, key_values, sections, forms
+            page_metrics (dict) — load_time_ms, dom_nodes, etc.
+            error    (str | None)
+    """
+    from .fetcher import PageFetcher
+
+    attributes = attributes or []
+    fetcher = PageFetcher()
+
+    try:
+        import asyncio
+
+        async def _run():
+            if render_js:
+                fetch = await fetcher._fetch_playwright(url, screenshot=False, screenshot_path=None, scroll_to_bottom=False)
+            else:
+                fetch = await fetcher._fetch_httpx(url)
+
+            if fetch.error or not fetch.html:
+                return {
+                    "success": False,
+                    "url": url,
+                    "results": {},
+                    "dom_index": {},
+                    "page_metrics": {},
+                    "error": fetch.error or "No content retrieved",
+                }
+
+            # Run CSS selector queries via Playwright page (already closed after _fetch_playwright)
+            # Instead parse with BeautifulSoup for reliability + speed
+            try:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(fetch.html, "lxml")
+            except Exception:
+                from bs4 import BeautifulSoup
+                soup = BeautifulSoup(fetch.html, "html.parser")
+
+            results: dict[str, list[dict]] = {}
+            for label, selector in (queries or {}).items():
+                matched = []
+                try:
+                    for el in soup.select(selector)[:50]:
+                        item: dict[str, Any] = {"text": el.get_text(separator=" ", strip=True)[:500]}
+                        for attr in attributes:
+                            val = el.get(attr)
+                            if val is not None:
+                                item[attr] = str(val)
+                        matched.append(item)
+                except Exception as exc:
+                    matched = [{"error": str(exc)}]
+                results[label] = matched
+
+            return {
+                "success": True,
+                "url": fetch.url or url,
+                "results": results,
+                "dom_index": fetch.dom_index if include_dom_index else {},
+                "page_metrics": fetch.page_metrics,
+                "error": None,
+            }
+
+        return asyncio.run(_run())
+
+    except Exception as exc:
+        return {
+            "success": False,
+            "url": url,
+            "results": {},
+            "dom_index": {},
+            "page_metrics": {},
+            "error": str(exc),
+        }

@@ -66,6 +66,7 @@ class FetchResult:
     embedded_json: dict = field(default_factory=dict)      # window globals (__NEXT_DATA__, __NUXT__, etc.)
     json_ld: list = field(default_factory=list)            # JSON-LD from <script type="application/ld+json">
     lazy_images_resolved: int = 0                          # count of lazy images resolved
+    dom_index: dict = field(default_factory=dict)          # semantic DOM index for LLM element queries
 
     def __post_init__(self):
         if self.frames is None:
@@ -328,6 +329,87 @@ class PageFetcher:
                 except Exception:
                     pass
 
+                # 5. Semantic DOM index for LLM element queries
+                dom_index: dict = {}
+                try:
+                    dom_index = await page.evaluate("""
+                    () => {
+                        const T = (el, limit=300) => (el.innerText||el.textContent||'').trim().slice(0,limit);
+                        const A = (el, attr) => el.getAttribute(attr)||'';
+
+                        // Headings
+                        const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
+                            .map((el,i) => ({
+                                i, level: parseInt(el.tagName[1]), text: T(el,200),
+                                id: A(el,'id'), href: A(el,'id') ? '#'+A(el,'id') : ''
+                            })).slice(0,80);
+
+                        // Tables
+                        const tables = Array.from(document.querySelectorAll('table')).map((t,i) => {
+                            const ths = Array.from(t.querySelectorAll('th')).map(th => T(th,100));
+                            const rows = Array.from(t.querySelectorAll('tr')).slice(0,10).map(tr =>
+                                Array.from(tr.querySelectorAll('td')).map(td => T(td,100))
+                            ).filter(r => r.length);
+                            return {i, headers: ths, rows};
+                        }).slice(0,20);
+
+                        // Code blocks
+                        const code = Array.from(document.querySelectorAll('pre code, pre'))
+                            .map((el,i) => {
+                                const lang = (A(el,'class').match(/language-([\\w-]+)/)||[])[1] || '';
+                                return {i, lang, text: T(el,800)};
+                            }).filter(c => c.text.length > 10).slice(0,30);
+
+                        // Lists
+                        const lists = Array.from(document.querySelectorAll('ul,ol')).map((el,i) => ({
+                            i, ordered: el.tagName==='OL',
+                            items: Array.from(el.querySelectorAll(':scope > li')).map(li => T(li,150)).slice(0,20)
+                        })).filter(l => l.items.length).slice(0,25);
+
+                        // Images
+                        const images = Array.from(document.querySelectorAll('img')).map((el,i) => ({
+                            i, src: A(el,'src')||A(el,'data-src'), alt: A(el,'alt'), width: el.naturalWidth||0
+                        })).filter(im => im.src).slice(0,40);
+
+                        // Key-value pairs from <dl> definition lists
+                        const key_values = Array.from(document.querySelectorAll('dl')).flatMap(dl => {
+                            const pairs = [];
+                            let key = '';
+                            dl.querySelectorAll('dt,dd').forEach(el => {
+                                if (el.tagName==='DT') key = T(el,100);
+                                else if (key) { pairs.push({key, value: T(el,200)}); key=''; }
+                            });
+                            return pairs;
+                        }).slice(0,40);
+
+                        // Named sections: heading + first 200 chars of following text
+                        const sections = [];
+                        document.querySelectorAll('h1,h2,h3').forEach(h => {
+                            let text = '';
+                            let n = h.nextElementSibling;
+                            while (n && !['H1','H2','H3'].includes(n.tagName) && text.length < 200) {
+                                text += ' ' + T(n, 200);
+                                n = n.nextElementSibling;
+                            }
+                            sections.push({heading: T(h,150), level: parseInt(h.tagName[1]),
+                                           id: A(h,'id'), preview: text.trim().slice(0,200)});
+                        });
+
+                        // Forms and inputs summary
+                        const forms = Array.from(document.querySelectorAll('form')).map((f,i) => ({
+                            i, action: A(f,'action'), method: A(f,'method')||'get',
+                            inputs: Array.from(f.querySelectorAll('input,select,textarea')).map(el => ({
+                                name: A(el,'name')||A(el,'id'), type: A(el,'type')||el.tagName.toLowerCase(),
+                                placeholder: A(el,'placeholder'), label: ''
+                            })).slice(0,15)
+                        })).slice(0,10);
+
+                        return {headings, tables, code, lists, images, key_values, sections, forms};
+                    }
+                    """) or {}
+                except Exception:
+                    pass
+
                 # SPA framework detection + shadow DOM
                 spa_info = await page.evaluate("""
                 () => {
@@ -437,6 +519,7 @@ class PageFetcher:
                     embedded_json=embedded_json,
                     json_ld=json_ld,
                     lazy_images_resolved=lazy_resolved,
+                    dom_index=dom_index,
                 )
         except Exception as exc:
             return FetchResult(url=url, html="", status_code=0, error=str(exc))

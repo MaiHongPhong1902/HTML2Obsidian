@@ -168,6 +168,8 @@ class BrowserPipeline:
             ctx["json_ld"] = fetch.json_ld
         if fetch.lazy_images_resolved:
             ctx["lazy_images_resolved"] = fetch.lazy_images_resolved
+        if fetch.dom_index:
+            ctx["dom_index"] = fetch.dom_index
         ctx["spa_framework"] = fetch.spa_framework
         result.browser_context = ctx
 
