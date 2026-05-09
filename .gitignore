@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Obsidian vault output (generated files)
+vault/
+
+# Screenshots / generated output
+*.png
+*.jpg
+*.jpeg
+
+# Playwright browsers cache
+.playwright-mcp/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / env files
+.env
+*.env

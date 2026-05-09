@@ -1,0 +1,23 @@
+# obsidian_tool — Dependencies
+
+# HTTP & rendering
+httpx>=0.28.0
+playwright>=1.44.0
+
+# HTML parsing & metadata
+beautifulsoup4>=4.12.0
+lxml>=5.2.0
+
+# Clean text extraction (HTML → Markdown)
+trafilatura>=1.9.0
+
+# Microsoft MarkItDown (HTML/PDF/DOCX/XLSX → Markdown)
+markitdown[pdf]>=0.1.5
+
+# PDF backends
+pdfminer.six>=20251230
+pdfplumber>=0.11.0
+pypdfium2>=5.8.0
+
+# NLP entity extraction (optional — run: python -m spacy download en_core_web_sm)
+spacy>=3.8.0
