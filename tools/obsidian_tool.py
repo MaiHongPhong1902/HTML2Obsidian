@@ -118,10 +118,35 @@ TOOL_SCHEMA = {
                 "type": "string",
                 "description": (
                     "Reuse an existing browser profile for cookies and login sessions. "
-                    "Accepts a shortcut (\"chrome\", \"edge\", \"firefox\") or an absolute "
-                    "path to a Chromium user-data directory."
+                    "Accepts a shortcut (\"chrome\", \"edge\", \"firefox\"), shortcut with "
+                    "profile name (\"chrome:Default\", \"edge:Profile 1\"), or an absolute path."
                 ),
                 "default": "",
+            },
+            "browser_channel": {
+                "type": "string",
+                "description": "Optional Playwright browser channel, e.g. chrome, msedge, chromium.",
+                "default": "",
+            },
+            "browser_headless": {
+                "type": "boolean",
+                "description": "Run browser headless. Set false to open a visible browser for login/cookie refresh.",
+                "default": True,
+            },
+            "storage_state_path": {
+                "type": "string",
+                "description": "Path to a Playwright storage_state JSON file to load cookies/localStorage.",
+                "default": "",
+            },
+            "save_storage_state_path": {
+                "type": "string",
+                "description": "Optional path to save cookies/localStorage after the page is fetched.",
+                "default": "",
+            },
+            "auth_wait_seconds": {
+                "type": "number",
+                "description": "Seconds to keep a visible/headed browser open before snapshot/save, useful for manual login.",
+                "default": 0,
             },
             "split_sections": {
                 "type": "boolean",
@@ -289,6 +314,11 @@ def create_obsidian_note(
     from_url: str = "",
     from_title: str = "",
     browser_profile: Optional[str] = None,
+    browser_channel: Optional[str] = None,
+    browser_headless: bool = True,
+    storage_state_path: str = "",
+    save_storage_state_path: str = "",
+    auth_wait_seconds: float = 0.0,
     split_sections: bool = False,
     split: Optional[bool] = None,
     include_site_map: bool = False,
@@ -349,12 +379,35 @@ def create_obsidian_note(
 
     requested_title = normalized_llm["edit"]["title"] or note_title or None
 
-    pipeline = BrowserPipeline(
-        render_js=render_js,
-        browser_profile=browser_profile,
-        capture_network=capture_network,
-    )
-    result = pipeline.run(url)
+    try:
+        pipeline = BrowserPipeline(
+            render_js=render_js,
+            browser_profile=browser_profile,
+            browser_channel=browser_channel or None,
+            browser_headless=browser_headless,
+            storage_state_path=storage_state_path or None,
+            save_storage_state_path=save_storage_state_path or None,
+            auth_wait_seconds=auth_wait_seconds,
+            capture_network=capture_network,
+        )
+        result = pipeline.run(url)
+    except Exception as exc:
+        return {
+            "success": False,
+            "title": "",
+            "content": "",
+            "agent_context": "",
+            "site_map": "",
+            "structured_data": None,
+            "applied_llm_config": {"accepted": [], "rejected": []},
+            "browser_context": None,
+            "path": "",
+            "site_map_path": "",
+            "url": url,
+            "tags": [],
+            "entities": [],
+            "error": str(exc),
+        }
 
     if result.fetch_error:
         return {

@@ -7,7 +7,9 @@ Browser profile support
 Pass `browser_profile` to reuse an existing browser profile (cookies, login
 sessions, extensions).  Accepts either:
   - A predefined shortcut string: "chrome", "chrome-dev", "edge", "firefox"
+  - A shortcut plus profile name: "chrome:Default", "edge:Profile 1"
   - An absolute path to a user-data directory (any Chromium-based browser)
+  - An absolute path to a Chromium profile dir (.../User Data/Default)
 
 On Windows the shortcuts resolve to the default profile directories:
   chrome      → %LOCALAPPDATA%/Google/Chrome/User Data
@@ -18,13 +20,18 @@ On Windows the shortcuts resolve to the default profile directories:
 Example:
     fetcher = PageFetcher(browser_profile="chrome")
     result  = fetcher.fetch("https://mail.google.com")
+
+For a more stable authenticated flow, pass `storage_state_path` to load a
+Playwright storage_state JSON, or `save_storage_state_path` to export one.
 """
 
 from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import os
+import re
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -34,11 +41,27 @@ from urllib.parse import urlparse
 import httpx
 
 # Predefined profile shortcuts (Windows paths)
-_PROFILE_SHORTCUTS: dict[str, str] = {
-    "chrome":      str(Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data"),
-    "chrome-dev":  str(Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome Dev" / "User Data"),
-    "edge":        str(Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data"),
-    "firefox":     str(Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox" / "Profiles"),
+_PROFILE_SHORTCUTS: dict[str, dict] = {
+    "chrome": {
+        "path": str(Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome" / "User Data"),
+        "browser": "chromium",
+        "channel": "chrome",
+    },
+    "chrome-dev": {
+        "path": str(Path(os.environ.get("LOCALAPPDATA", "")) / "Google" / "Chrome Dev" / "User Data"),
+        "browser": "chromium",
+        "channel": "chrome",
+    },
+    "edge": {
+        "path": str(Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "Edge" / "User Data"),
+        "browser": "chromium",
+        "channel": "msedge",
+    },
+    "firefox": {
+        "path": str(Path(os.environ.get("APPDATA", "")) / "Mozilla" / "Firefox" / "Profiles"),
+        "browser": "firefox",
+        "channel": None,
+    },
 }
 
 # Binary/document file extensions — do not use Playwright for these
@@ -92,21 +115,53 @@ class PageFetcher:
             "Chrome/124.0.0.0 Safari/537.36"
         ),
         browser_profile: Optional[str] = None,
+        browser_channel: Optional[str] = None,
+        browser_headless: bool = True,
+        storage_state_path: Optional[str] = None,
+        save_storage_state_path: Optional[str] = None,
+        auth_wait_seconds: float = 0.0,
         capture_network: bool = False,        # capture XHR/fetch requests during page load
     ):
         self.timeout = timeout
         self.wait_until = wait_until
         self.viewport = viewport or {"width": 1280, "height": 800}
         self.user_agent = user_agent
-        self.browser_profile = self._resolve_profile(browser_profile)
+        profile_config = self._resolve_profile(browser_profile)
+        self.browser_profile = profile_config["user_data_dir"] if profile_config else None
+        self.browser_profile_directory = profile_config["profile_directory"] if profile_config else ""
+        self.browser_name = profile_config["browser"] if profile_config else "chromium"
+        effective_channel = browser_channel or (profile_config["channel"] if profile_config else None)
+        self.browser_channel = None if effective_channel in {"", "chromium"} else effective_channel
+        self.browser_headless = browser_headless
+        self.storage_state_path = self._resolve_optional_file(storage_state_path, must_exist=True)
+        self.save_storage_state_path = self._resolve_optional_file(save_storage_state_path, must_exist=False)
+        self.auth_wait_seconds = max(0.0, float(auth_wait_seconds or 0.0))
         self.capture_network = capture_network
 
     @staticmethod
-    def _resolve_profile(profile: Optional[str]) -> Optional[str]:
-        """Resolve shortcut name or path → absolute user-data dir, or None."""
+    def _resolve_profile(profile: Optional[str]) -> Optional[dict]:
+        """Resolve shortcut/path to browser launch profile config, or None."""
         if not profile:
             return None
-        resolved = _PROFILE_SHORTCUTS.get(profile.lower(), profile)
+        raw = profile.strip()
+        profile_directory = ""
+        browser = "chromium"
+        channel = None
+
+        shortcut = raw
+        if ":" in raw and not re.match(r"^[A-Za-z]:[\\/]", raw):
+            shortcut, profile_directory = raw.split(":", 1)
+            shortcut = shortcut.strip()
+            profile_directory = profile_directory.strip()
+
+        spec = _PROFILE_SHORTCUTS.get(shortcut.lower())
+        if spec:
+            resolved = spec["path"]
+            browser = spec["browser"]
+            channel = spec["channel"]
+        else:
+            resolved = raw
+
         p = Path(resolved)
         if not p.exists():
             raise FileNotFoundError(
@@ -114,11 +169,47 @@ class PageFetcher:
                 f"Available shortcuts: {list(_PROFILE_SHORTCUTS)}"
             )
         # Firefox stores profiles in sub-dirs; pick the first *.default* one
-        if "Firefox" in resolved and p.is_dir():
+        if browser == "firefox" and p.is_dir():
             candidates = sorted(p.glob("*.default*"))
             if candidates:
-                return str(candidates[0])
-        return resolved
+                p = candidates[0]
+
+        # If caller passed a Chromium profile dir (.../User Data/Default), launch
+        # using the parent user-data dir plus --profile-directory=<name>.
+        if browser == "chromium" and (p / "Preferences").exists() and (p.parent / "Local State").exists():
+            profile_directory = profile_directory or p.name
+            p = p.parent
+
+        return {
+            "user_data_dir": str(p),
+            "profile_directory": profile_directory,
+            "browser": browser,
+            "channel": channel,
+        }
+
+    @staticmethod
+    def _resolve_optional_file(path: Optional[str], *, must_exist: bool) -> Optional[str]:
+        if not path:
+            return None
+        resolved = Path(path).expanduser()
+        if must_exist and not resolved.exists():
+            raise FileNotFoundError(f"Cookie/storage state file not found: {resolved}")
+        return str(resolved)
+
+    @staticmethod
+    async def _add_storage_state_cookies(context, storage_state_path: str) -> None:
+        """Load cookies from a Playwright storage_state JSON into an existing context."""
+        try:
+            data = json.loads(Path(storage_state_path).read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        cookies = data.get("cookies", data if isinstance(data, list) else [])
+        if isinstance(cookies, list) and cookies:
+            try:
+                await context.add_cookies(cookies)
+            except Exception:
+                pass
 
     # ------------------------------------------------------------------
     # Public API
@@ -191,20 +282,36 @@ class PageFetcher:
                 if self.browser_profile:
                     # Use persistent context so cookies/sessions are loaded from the profile.
                     # Chrome must be closed before Playwright opens the same profile.
-                    context = await p.chromium.launch_persistent_context(
-                        user_data_dir=self.browser_profile,
-                        headless=True,
-                        viewport=self.viewport,
-                        user_agent=self.user_agent,
-                        args=["--disable-blink-features=AutomationControlled"],
-                    )
+                    browser_type = p.firefox if self.browser_name == "firefox" else p.chromium
+                    launch_args = ["--disable-blink-features=AutomationControlled"]
+                    if self.browser_profile_directory and self.browser_name == "chromium":
+                        launch_args.append(f"--profile-directory={self.browser_profile_directory}")
+                    launch_options = {
+                        "user_data_dir": self.browser_profile,
+                        "headless": self.browser_headless,
+                        "viewport": self.viewport,
+                        "user_agent": self.user_agent,
+                    }
+                    if self.browser_name == "chromium":
+                        launch_options["args"] = launch_args
+                        if self.browser_channel:
+                            launch_options["channel"] = self.browser_channel
+                    context = await browser_type.launch_persistent_context(**launch_options)
                     browser = None  # persistent context owns everything
                 else:
-                    browser = await p.chromium.launch(headless=True)
-                    context = await browser.new_context(
-                        viewport=self.viewport,
-                        user_agent=self.user_agent,
-                    )
+                    launch_options = {"headless": self.browser_headless}
+                    if self.browser_channel:
+                        launch_options["channel"] = self.browser_channel
+                    browser = await p.chromium.launch(**launch_options)
+                    context_options = {
+                        "viewport": self.viewport,
+                        "user_agent": self.user_agent,
+                    }
+                    if self.storage_state_path:
+                        context_options["storage_state"] = self.storage_state_path
+                    context = await browser.new_context(**context_options)
+                if self.storage_state_path and self.browser_profile:
+                    await self._add_storage_state_cookies(context, self.storage_state_path)
                 page = await context.new_page()
 
                 # --- Network request capture ---
@@ -268,6 +375,10 @@ class PageFetcher:
                         html = await page.content()  # re-snapshot after element appears
                     except Exception:
                         pass  # selector never appeared — continue with current html
+
+                if self.auth_wait_seconds:
+                    await page.wait_for_timeout(self.auth_wait_seconds * 1000)
+                    html = await page.content()
 
                 # --- Browser context extraction ---
 
@@ -593,6 +704,13 @@ class PageFetcher:
                     screenshot_b64 = base64.b64encode(png_bytes).decode()
                     if screenshot_path:
                         Path(screenshot_path).write_bytes(png_bytes)
+
+                if self.save_storage_state_path:
+                    try:
+                        Path(self.save_storage_state_path).parent.mkdir(parents=True, exist_ok=True)
+                        await context.storage_state(path=self.save_storage_state_path)
+                    except Exception:
+                        pass
 
                 await context.close()
                 if browser:

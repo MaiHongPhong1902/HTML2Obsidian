@@ -117,7 +117,12 @@ print(result["applied_llm_config"])
 | `extra_tags` | `list[str]` | `[]` | Additional frontmatter tags |
 | `from_url` | `str` | `""` | Source URL for backlink |
 | `from_title` | `str` | `""` | Title of the source page |
-| `browser_profile` | `str` | `""` | Browser profile shortcut or absolute path |
+| `browser_profile` | `str` | `""` | Browser profile shortcut/path. Supports `chrome`, `edge`, `firefox`, `chrome:Default`, `edge:Profile 1` |
+| `browser_channel` | `str` | `""` | Optional Playwright browser channel override, e.g. `chrome`, `msedge` |
+| `browser_headless` | `bool` | `True` | Set `False` to open a visible browser for login/cookie refresh |
+| `storage_state_path` | `str` | `""` | Load cookies/localStorage from a Playwright `storage_state` JSON file |
+| `save_storage_state_path` | `str` | `""` | Save cookies/localStorage to a Playwright `storage_state` JSON file after fetch |
+| `auth_wait_seconds` | `float` | `0.0` | Keep a headed browser open before snapshot/save so manual login can finish |
 | `split_sections` | `bool` | `False` | Split into sub-notes per page section |
 | `split` | `bool \| None` | `None` | Alias for `split_sections`, matching CLI `--split` |
 | `include_site_map` | `bool` | `False` | Generate a dedicated site map note |
@@ -384,6 +389,12 @@ result.summary          # SummaryResult if summarize=True
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `render_js` | `bool` | `True` | Use Playwright for JS rendering |
+| `browser_profile` | `str` | `None` | Reuse authenticated browser profile; supports `chrome:Default`, `edge:Profile 1`, or absolute profile/user-data path |
+| `browser_channel` | `str` | `None` | Browser channel override, e.g. `chrome`, `msedge` |
+| `browser_headless` | `bool` | `True` | Set `False` for visible login/cookie refresh |
+| `storage_state_path` | `str` | `None` | Load Playwright `storage_state` cookies/localStorage |
+| `save_storage_state_path` | `str` | `None` | Save Playwright `storage_state` after fetch |
+| `auth_wait_seconds` | `float` | `0.0` | Keep headed browser open before snapshot/save for manual login |
 | `capture_network` | `bool` | `False` | Capture XHR/fetch requests |
 | `wait_for_selector` | `str` | `None` | CSS selector to wait for before snapshot |
 | `wait_for_timeout` | `float` | `10.0` | Max seconds to wait for selector |

@@ -29,7 +29,17 @@ def main():
                         help="Extra tags to add")
     parser.add_argument("--profile", default="", metavar="PROFILE",
                         help='Browser profile to use for cookies/sessions. '
-                             'Shortcuts: chrome, edge, firefox. Or an absolute path.')
+                             'Shortcuts: chrome, edge, firefox; supports chrome:Default, edge:Profile 1, or an absolute path.')
+    parser.add_argument("--browser-channel", default="", metavar="CHANNEL",
+                        help="Playwright browser channel to launch, e.g. chrome, msedge, chromium")
+    parser.add_argument("--headed", action="store_true",
+                        help="Open a visible browser window so cookies/login can be refreshed")
+    parser.add_argument("--cookies", "--storage-state", dest="storage_state", default="", metavar="FILE",
+                        help="Load cookies/localStorage from a Playwright storage_state JSON file")
+    parser.add_argument("--save-cookies", "--save-storage-state", dest="save_storage_state", default="", metavar="FILE",
+                        help="Save cookies/localStorage to a Playwright storage_state JSON file after fetch")
+    parser.add_argument("--auth-wait", type=float, default=0.0, metavar="SECONDS",
+                        help="Keep headed browser open before snapshot/save so you can finish login")
     parser.add_argument("--split", action="store_true",
                         help="Split note into sub-notes by page section (saved in vault/{Title}/ subfolder)")
     parser.add_argument("--site-map", "--sitemap", dest="site_map", action="store_true",
@@ -54,6 +64,11 @@ def main():
         render_js=not args.no_js,
         extra_tags=args.tags,
         browser_profile=args.profile or None,
+        browser_channel=args.browser_channel or None,
+        browser_headless=not args.headed,
+        storage_state_path=args.storage_state,
+        save_storage_state_path=args.save_storage_state,
+        auth_wait_seconds=args.auth_wait,
         split_sections=args.split,
         include_site_map=args.site_map,
         site_map_style=args.site_map_style,

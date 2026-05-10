@@ -103,6 +103,11 @@ class BrowserPipeline:
         scroll_to_bottom: bool = False,
         timeout: float = 30.0,
         browser_profile: Optional[str] = None,
+        browser_channel: Optional[str] = None,
+        browser_headless: bool = True,
+        storage_state_path: Optional[str] = None,
+        save_storage_state_path: Optional[str] = None,
+        auth_wait_seconds: float = 0.0,
         capture_network: bool = False,         # capture XHR/fetch requests for browser_context
         wait_for_selector: Optional[str] = None,   # wait for CSS selector before DOM snapshot
         wait_for_timeout: float = 10.0,            # max seconds to wait for selector
@@ -125,6 +130,11 @@ class BrowserPipeline:
         self._fetcher = PageFetcher(
             timeout=timeout,
             browser_profile=browser_profile,
+            browser_channel=browser_channel,
+            browser_headless=browser_headless,
+            storage_state_path=storage_state_path,
+            save_storage_state_path=save_storage_state_path,
+            auth_wait_seconds=auth_wait_seconds,
             capture_network=capture_network,
         )
         self._extractor = PageExtractor()

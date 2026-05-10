@@ -63,6 +63,14 @@ python note.py --vault ./vault --site-map --site-map-style both https://docs.git
 # Reuse browser profile (logged-in cookies)
 python note.py --vault ./vault --profile chrome https://mail.google.com
 
+# Use a specific Chrome / Edge profile
+python note.py --vault ./vault --profile "chrome:Default" https://mail.google.com
+python note.py --vault ./vault --profile "edge:Profile 1" https://example.com
+
+# Load or save Playwright cookies/localStorage state
+python note.py --vault ./vault --cookies ./auth-state.json https://example.com
+python note.py --vault ./vault --headed --auth-wait 60 --save-cookies ./auth-state.json https://example.com
+
 # Custom title + extra tags
 python note.py --vault ./vault --title "My Note" --tags research ai https://example.com
 
@@ -83,6 +91,11 @@ python note.py https://example.com
 | `--no-js` | Skip Playwright — faster for static pages |
 | `--tags TAG …` | Extra frontmatter tags |
 | `--profile PROFILE` | Browser profile: `chrome` \| `edge` \| `firefox` \| `/abs/path` |
+| `--browser-channel CHANNEL` | Browser channel: `chrome`, `msedge`; optional override |
+| `--headed` | Launch visible browser window for login/cookie refresh |
+| `--auth-wait SECONDS` | Keep headed browser open before snapshot/save so you can finish login |
+| `--cookies FILE` | Load Playwright `storage_state` JSON cookies/localStorage |
+| `--save-cookies FILE` | Save Playwright `storage_state` JSON after fetch |
 | `--split` | Split note into sub-notes by page section |
 | `--site-map`, `--sitemap` | Generate a dedicated site map note |
 | `--site-map-style STYLE` | Site map rendering: `tree` \| `table` \| `both` |
@@ -168,7 +181,7 @@ See [API-docs.md → LLM Tool Calling](API-docs.md#llm-tool-calling) for complet
 
 ---
 
-## Browser Profile (Authenticated Pages)
+## Browser Profile / Cookies (Authenticated Pages)
 
 Reuse an existing browser so the tool can access login-required pages:
 
@@ -176,7 +189,7 @@ Reuse an existing browser so the tool can access login-required pages:
 result = create_obsidian_note(
     url="https://github.com/notifications",
     vault_path="./vault",
-    browser_profile="chrome",
+    browser_profile="chrome:Default",
 )
 ```
 
@@ -187,7 +200,14 @@ result = create_obsidian_note(
 | `edge` | `%LOCALAPPDATA%\Microsoft\Edge\User Data` |
 | `firefox` | `%APPDATA%\Mozilla\Firefox\Profiles\*.default*` |
 
-Or pass an absolute path to any Chromium user-data directory.
+You can append a profile directory name, for example `chrome:Default` or `edge:Profile 1`. You can also pass an absolute Chromium user-data directory, or a profile directory such as `...\User Data\Default`.
+
+For repeatable authenticated scraping, export cookies/localStorage once:
+
+```bash
+python note.py --headed --auth-wait 60 --save-cookies ./auth-state.json https://example.com/login
+python note.py --vault ./vault --cookies ./auth-state.json https://example.com/private
+```
 
 > **Note:** Close Chrome / Edge before running — only one process can hold a profile lock at a time.
 
