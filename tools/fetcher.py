@@ -71,6 +71,12 @@ _BINARY_EXTENSIONS = {
     ".gz", ".tar", ".mp3", ".mp4", ".avi", ".mkv",
 }
 
+_DEFAULT_STORAGE_STATE_CANDIDATES = (
+    "auth-state.json",
+    ".auth-state.json",
+    str(Path(".html2obsidian") / "auth-state.json"),
+)
+
 
 @dataclass
 class FetchResult:
@@ -118,6 +124,7 @@ class PageFetcher:
         browser_channel: Optional[str] = None,
         browser_headless: bool = True,
         storage_state_path: Optional[str] = None,
+        auto_storage_state: bool = True,
         save_storage_state_path: Optional[str] = None,
         auth_wait_seconds: float = 0.0,
         capture_network: bool = False,        # capture XHR/fetch requests during page load
@@ -133,7 +140,10 @@ class PageFetcher:
         effective_channel = browser_channel or (profile_config["channel"] if profile_config else None)
         self.browser_channel = None if effective_channel in {"", "chromium"} else effective_channel
         self.browser_headless = browser_headless
-        self.storage_state_path = self._resolve_optional_file(storage_state_path, must_exist=True)
+        self.storage_state_path = self._resolve_storage_state_path(
+            storage_state_path,
+            auto_storage_state=auto_storage_state,
+        )
         self.save_storage_state_path = self._resolve_optional_file(save_storage_state_path, must_exist=False)
         self.auth_wait_seconds = max(0.0, float(auth_wait_seconds or 0.0))
         self.capture_network = capture_network
@@ -195,6 +205,27 @@ class PageFetcher:
         if must_exist and not resolved.exists():
             raise FileNotFoundError(f"Cookie/storage state file not found: {resolved}")
         return str(resolved)
+
+    @classmethod
+    def _resolve_storage_state_path(
+        cls,
+        path: Optional[str],
+        *,
+        auto_storage_state: bool = True,
+    ) -> Optional[str]:
+        if path:
+            return cls._resolve_optional_file(path, must_exist=True)
+        if not auto_storage_state:
+            return None
+
+        env_path = os.environ.get("HTML2OBSIDIAN_STORAGE_STATE", "").strip()
+        candidates = [env_path] if env_path else []
+        candidates.extend(_DEFAULT_STORAGE_STATE_CANDIDATES)
+        for candidate in candidates:
+            resolved = Path(candidate).expanduser()
+            if resolved.exists() and resolved.is_file():
+                return str(resolved)
+        return None
 
     @staticmethod
     async def _add_storage_state_cookies(context, storage_state_path: str) -> None:

@@ -36,6 +36,8 @@ def main():
                         help="Open a visible browser window so cookies/login can be refreshed")
     parser.add_argument("--cookies", "--storage-state", dest="storage_state", default="", metavar="FILE",
                         help="Load cookies/localStorage from a Playwright storage_state JSON file")
+    parser.add_argument("--no-auto-cookies", action="store_true",
+                        help="Disable automatic loading from saved auth-state.json storage files")
     parser.add_argument("--save-cookies", "--save-storage-state", dest="save_storage_state", default="", metavar="FILE",
                         help="Save cookies/localStorage to a Playwright storage_state JSON file after fetch")
     parser.add_argument("--auth-wait", type=float, default=0.0, metavar="SECONDS",
@@ -67,6 +69,7 @@ def main():
         browser_channel=args.browser_channel or None,
         browser_headless=not args.headed,
         storage_state_path=args.storage_state,
+        auto_storage_state=not args.no_auto_cookies,
         save_storage_state_path=args.save_storage_state,
         auth_wait_seconds=args.auth_wait,
         split_sections=args.split,

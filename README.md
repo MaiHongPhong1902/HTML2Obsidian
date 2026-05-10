@@ -71,6 +71,9 @@ python note.py --vault ./vault --profile "edge:Profile 1" https://example.com
 python note.py --vault ./vault --cookies ./auth-state.json https://example.com
 python note.py --vault ./vault --headed --auth-wait 60 --save-cookies ./auth-state.json https://example.com
 
+# If ./auth-state.json exists, it is loaded automatically
+python note.py --vault ./vault https://example.com/private
+
 # Custom title + extra tags
 python note.py --vault ./vault --title "My Note" --tags research ai https://example.com
 
@@ -95,6 +98,7 @@ python note.py https://example.com
 | `--headed` | Launch visible browser window for login/cookie refresh |
 | `--auth-wait SECONDS` | Keep headed browser open before snapshot/save so you can finish login |
 | `--cookies FILE` | Load Playwright `storage_state` JSON cookies/localStorage |
+| `--no-auto-cookies` | Disable automatic loading from saved storage files |
 | `--save-cookies FILE` | Save Playwright `storage_state` JSON after fetch |
 | `--split` | Split note into sub-notes by page section |
 | `--site-map`, `--sitemap` | Generate a dedicated site map note |
@@ -206,8 +210,10 @@ For repeatable authenticated scraping, export cookies/localStorage once:
 
 ```bash
 python note.py --headed --auth-wait 60 --save-cookies ./auth-state.json https://example.com/login
-python note.py --vault ./vault --cookies ./auth-state.json https://example.com/private
+python note.py --vault ./vault https://example.com/private
 ```
+
+When `--cookies` is omitted, the tool automatically checks `HTML2OBSIDIAN_STORAGE_STATE`, `./auth-state.json`, `./.auth-state.json`, then `./.html2obsidian/auth-state.json`. Use `--no-auto-cookies` to force a clean browser context.
 
 > **Note:** Close Chrome / Edge before running — only one process can hold a profile lock at a time.
 

@@ -138,6 +138,15 @@ TOOL_SCHEMA = {
                 "description": "Path to a Playwright storage_state JSON file to load cookies/localStorage.",
                 "default": "",
             },
+            "auto_storage_state": {
+                "type": "boolean",
+                "description": (
+                    "Automatically load saved storage state when storage_state_path is empty. "
+                    "Checks HTML2OBSIDIAN_STORAGE_STATE, ./auth-state.json, ./.auth-state.json, "
+                    "and ./.html2obsidian/auth-state.json."
+                ),
+                "default": True,
+            },
             "save_storage_state_path": {
                 "type": "string",
                 "description": "Optional path to save cookies/localStorage after the page is fetched.",
@@ -317,6 +326,7 @@ def create_obsidian_note(
     browser_channel: Optional[str] = None,
     browser_headless: bool = True,
     storage_state_path: str = "",
+    auto_storage_state: bool = True,
     save_storage_state_path: str = "",
     auth_wait_seconds: float = 0.0,
     split_sections: bool = False,
@@ -386,6 +396,7 @@ def create_obsidian_note(
             browser_channel=browser_channel or None,
             browser_headless=browser_headless,
             storage_state_path=storage_state_path or None,
+            auto_storage_state=auto_storage_state,
             save_storage_state_path=save_storage_state_path or None,
             auth_wait_seconds=auth_wait_seconds,
             capture_network=capture_network,

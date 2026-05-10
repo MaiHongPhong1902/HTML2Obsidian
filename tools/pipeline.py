@@ -106,6 +106,7 @@ class BrowserPipeline:
         browser_channel: Optional[str] = None,
         browser_headless: bool = True,
         storage_state_path: Optional[str] = None,
+        auto_storage_state: bool = True,
         save_storage_state_path: Optional[str] = None,
         auth_wait_seconds: float = 0.0,
         capture_network: bool = False,         # capture XHR/fetch requests for browser_context
@@ -133,6 +134,7 @@ class BrowserPipeline:
             browser_channel=browser_channel,
             browser_headless=browser_headless,
             storage_state_path=storage_state_path,
+            auto_storage_state=auto_storage_state,
             save_storage_state_path=save_storage_state_path,
             auth_wait_seconds=auth_wait_seconds,
             capture_network=capture_network,

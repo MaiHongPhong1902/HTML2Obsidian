@@ -121,6 +121,7 @@ print(result["applied_llm_config"])
 | `browser_channel` | `str` | `""` | Optional Playwright browser channel override, e.g. `chrome`, `msedge` |
 | `browser_headless` | `bool` | `True` | Set `False` to open a visible browser for login/cookie refresh |
 | `storage_state_path` | `str` | `""` | Load cookies/localStorage from a Playwright `storage_state` JSON file |
+| `auto_storage_state` | `bool` | `True` | Auto-load saved storage state when `storage_state_path` is empty |
 | `save_storage_state_path` | `str` | `""` | Save cookies/localStorage to a Playwright `storage_state` JSON file after fetch |
 | `auth_wait_seconds` | `float` | `0.0` | Keep a headed browser open before snapshot/save so manual login can finish |
 | `split_sections` | `bool` | `False` | Split into sub-notes per page section |
@@ -393,6 +394,7 @@ result.summary          # SummaryResult if summarize=True
 | `browser_channel` | `str` | `None` | Browser channel override, e.g. `chrome`, `msedge` |
 | `browser_headless` | `bool` | `True` | Set `False` for visible login/cookie refresh |
 | `storage_state_path` | `str` | `None` | Load Playwright `storage_state` cookies/localStorage |
+| `auto_storage_state` | `bool` | `True` | Auto-load `HTML2OBSIDIAN_STORAGE_STATE`, `./auth-state.json`, `./.auth-state.json`, or `./.html2obsidian/auth-state.json` |
 | `save_storage_state_path` | `str` | `None` | Save Playwright `storage_state` after fetch |
 | `auth_wait_seconds` | `float` | `0.0` | Keep headed browser open before snapshot/save for manual login |
 | `capture_network` | `bool` | `False` | Capture XHR/fetch requests |
