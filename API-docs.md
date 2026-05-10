@@ -119,7 +119,9 @@ print(result["applied_llm_config"])
 | `from_title` | `str` | `""` | Title of the source page |
 | `browser_profile` | `str` | `""` | Browser profile shortcut or absolute path |
 | `split_sections` | `bool` | `False` | Split into sub-notes per page section |
+| `split` | `bool \| None` | `None` | Alias for `split_sections`, matching CLI `--split` |
 | `include_site_map` | `bool` | `False` | Generate a dedicated site map note |
+| `site_map` | `bool \| None` | `None` | Alias for `include_site_map`, matching CLI `--site-map` / `--sitemap` |
 | `site_map_style` | `str` | `"tree"` | `tree`, `table`, or `both` |
 | `site_map_max_depth` | `int` | `3` | Maximum URL depth to expand in tree mode |
 | `site_map_max_internal_links` | `int` | `120` | Maximum internal links to include in the site map |
@@ -155,13 +157,14 @@ print(result["applied_llm_config"])
 
 | Key | Type | Description |
 |---|---|---|
-| `spa_framework` | `str` | `static` \| `react` \| `vue` \| `angular` \| `next.js` \| `nuxt` |
+| `spa_framework` | `str` | `static` \| `react` \| `vue` \| `angular` \| `next.js` \| `nuxt` \| `formio` \| `outsystems` |
 | `page_metrics` | `dict` | `load_time_ms`, `dom_content_loaded_ms`, `dom_nodes`, `images`, `scripts`, `links` |
 | `network_requests` | `list` | XHR/fetch calls: `[{url, method, status, content_type}]` (requires `capture_network=True`) |
 | `embedded_json` | `dict` | SSR window globals: `__NEXT_DATA__`, `__NUXT__`, `__REDUX_STATE__`, etc. |
 | `json_ld` | `list` | Parsed `<script type="application/ld+json">` objects |
 | `lazy_images_resolved` | `int` | Count of `data-src` images resolved before snapshot |
 | `dom_index` | `dict` | Semantic DOM index — see [DOM Index](#dom-index) |
+| `lowcode` | `dict` | Low-code/no-code summary: platform, indicators, rendered component count, schema component count |
 
 ---
 
@@ -315,12 +318,12 @@ llm_config = {
 
 ### Editable Section Keys
 
-`summary`, `agent_snapshot`, `page_structure`, `interactive_elements`, `content`, `relationships`, `references`, `navigation`
+`summary`, `agent_snapshot`, `page_structure`, `lowcode`, `interactive_elements`, `content`, `relationships`, `references`, `navigation`
 
 ### Protected Frontmatter Fields
 
 Cannot be overwritten via `edit.frontmatter_fields`:
-`title`, `url`, `domain`, `fetched`, `tags`, `entities`, `from_url`, `framework`, `has_shadow_dom`, `video_id`, `channel`, `upload_date`, `duration`, `map_for`, `last_updated`, `source_page`, `map_style`, `tree_depth`, `internal_links_count`, `external_links_count`
+`title`, `url`, `domain`, `fetched`, `tags`, `entities`, `from_url`, `framework`, `has_shadow_dom`, `lowcode_platform`, `lowcode_components_count`, `video_id`, `channel`, `upload_date`, `duration`, `map_for`, `last_updated`, `source_page`, `map_style`, `tree_depth`, `internal_links_count`, `external_links_count`
 
 ---
 
@@ -338,6 +341,7 @@ Every Playwright fetch automatically builds a `dom_index` — a semantic snapsho
 | `key_values` | `list` | `<dl>` definition list pairs `{key, value}` |
 | `sections` | `list` | Heading + 200-char preview of following content |
 | `forms` | `list` | `{action, method, inputs[]}` for each `<form>` |
+| `lowcode_components` | `list` | Rendered Form.io/OutSystems-like components with label, key, type, required, disabled |
 
 SPAs render data asynchronously — use `wait_for_selector` to ensure the snapshot is taken **after** the target content has appeared:
 

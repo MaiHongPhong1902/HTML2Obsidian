@@ -32,7 +32,7 @@ def main():
                              'Shortcuts: chrome, edge, firefox. Or an absolute path.')
     parser.add_argument("--split", action="store_true",
                         help="Split note into sub-notes by page section (saved in vault/{Title}/ subfolder)")
-    parser.add_argument("--site-map", action="store_true",
+    parser.add_argument("--site-map", "--sitemap", dest="site_map", action="store_true",
                         help="Generate a dedicated site map note with hierarchical URL tree output")
     parser.add_argument("--site-map-style", default="tree", metavar="STYLE",
                         choices=["tree", "table", "both"],

@@ -17,6 +17,7 @@ Fetch any URL and produce structured [Obsidian](https://obsidian.md/) Markdown n
 | **🏷️ Smart Auto Tags** | combines domain hints, metadata keywords, URL structure, and page signals |
 | **📑 Split-note mode** | one `.md` per page region in `vault/{Title}/` subfolder |
 | **SPA support** | Playwright renders React / Vue / Next.js before extraction |
+| **Low-code / no-code forms** | detects Form.io and OutSystems rendered forms, field keys, labels, validation, and embedded schemas |
 | **YouTube** | channel, views, likes, duration, related videos — no API key |
 | **Browser profile** | reuse Chrome / Edge / Firefox cookies and login sessions |
 | **LLM summarisation** | optional small-model pre-summary (Ollama / OpenAI-compatible) |
@@ -50,10 +51,13 @@ python note.py --vault ./vault --no-js https://en.wikipedia.org/wiki/Python
 # JS-rendered SPA
 python note.py --vault ./vault https://github.com/owner/repo
 
+# Low-code / no-code rendered forms (Form.io, OutSystems)
+python note.py --vault ./vault https://example.com/runtime-form
+
 # Split into sub-notes per page section
 python note.py --vault ./vault --split https://docs.github.com/en
 
-# Generate a dedicated site tree map
+# Generate a dedicated site tree map (--sitemap is also accepted)
 python note.py --vault ./vault --site-map --site-map-style both https://docs.github.com/en
 
 # Reuse browser profile (logged-in cookies)
@@ -80,7 +84,7 @@ python note.py https://example.com
 | `--tags TAG …` | Extra frontmatter tags |
 | `--profile PROFILE` | Browser profile: `chrome` \| `edge` \| `firefox` \| `/abs/path` |
 | `--split` | Split note into sub-notes by page section |
-| `--site-map` | Generate a dedicated site map note |
+| `--site-map`, `--sitemap` | Generate a dedicated site map note |
 | `--site-map-style STYLE` | Site map rendering: `tree` \| `table` \| `both` |
 | `--site-map-depth N` | Maximum URL depth to expand in tree mode |
 | `--site-map-links N` | Maximum internal links to include in the site map |

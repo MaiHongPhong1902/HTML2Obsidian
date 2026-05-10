@@ -242,6 +242,21 @@ class PageFetcher:
                 except Exception:
                     pass  # timeout OK — use current html
 
+                # Low-code/no-code renderers often attach controls after the main
+                # SPA idle event. Give detected runtimes a short extra settle time.
+                try:
+                    lowcode_seen = await page.evaluate("""
+                    () => Boolean(
+                        document.querySelector('.formio, .formio-component, [data-block], [data-widget], [data-container], .osui, [class*="osui-"]')
+                        || Array.from(document.scripts).some(s => /formio|outsystems/i.test(s.src || s.textContent || ''))
+                    )
+                    """)
+                    if lowcode_seen:
+                        await page.wait_for_timeout(800)
+                        html = await page.content()
+                except Exception:
+                    pass
+
                 # Wait for a specific selector to appear (caller-defined element readiness)
                 if wait_for_selector:
                     try:
@@ -358,6 +373,37 @@ class PageFetcher:
                     () => {
                         const T = (el, limit=300) => (el.innerText||el.textContent||'').trim().slice(0,limit);
                         const A = (el, attr) => el.getAttribute(attr)||'';
+                        const labelFor = (el) => {
+                            const id = A(el, 'id');
+                            if (id) {
+                                const escaped = (window.CSS && CSS.escape) ? CSS.escape(id) : id.replace(/"/g, '\\"');
+                                const direct = document.querySelector(`label[for="${escaped}"]`);
+                                if (direct) return T(direct, 120);
+                            }
+                            const labelledBy = A(el, 'aria-labelledby');
+                            if (labelledBy) {
+                                const labels = labelledBy.split(/\\s+/).map(x => document.getElementById(x)).filter(Boolean).map(x => T(x, 80));
+                                if (labels.length) return labels.join(' ').slice(0, 120);
+                            }
+                            const closest = el.closest('label,.formio-component,.form-group,[data-block],[data-widget]');
+                            if (closest) {
+                                const label = closest.querySelector('label,.control-label,.formio-label');
+                                if (label) return T(label, 120);
+                            }
+                            return A(el, 'aria-label') || A(el, 'placeholder') || '';
+                        };
+                        const componentKey = (el) => {
+                            let node = el;
+                            for (let i = 0; node && i < 5; i++, node = node.parentElement) {
+                                for (const attr of ['data-key','data-name','data-field','data-input','name','id']) {
+                                    const raw = A(node, attr);
+                                    if (!raw) continue;
+                                    const m = raw.match(/^data\\[([^\\]]+)\\]/);
+                                    return (m ? m[1] : raw).slice(0, 120);
+                                }
+                            }
+                            return '';
+                        };
 
                         // Headings
                         const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,h6'))
@@ -422,11 +468,31 @@ class PageFetcher:
                             i, action: A(f,'action'), method: A(f,'method')||'get',
                             inputs: Array.from(f.querySelectorAll('input,select,textarea')).map(el => ({
                                 name: A(el,'name')||A(el,'id'), type: A(el,'type')||el.tagName.toLowerCase(),
-                                placeholder: A(el,'placeholder'), label: ''
+                                placeholder: A(el,'placeholder'), label: labelFor(el), key: componentKey(el),
+                                required: el.hasAttribute('required')
                             })).slice(0,15)
                         })).slice(0,10);
 
-                        return {headings, tables, code, lists, images, key_values, sections, forms};
+                        const lowcode_components = Array.from(document.querySelectorAll('.formio-component, [data-block], [data-widget], input, select, textarea, button'))
+                            .map((el, i) => {
+                                const control = ['INPUT','SELECT','TEXTAREA','BUTTON'].includes(el.tagName) ? el : el.querySelector('input,select,textarea,button');
+                                const target = control || el;
+                                const classes = A(el, 'class');
+                                const typeClass = (classes.match(/formio-component-([a-zA-Z0-9_-]+)/) || [])[1] || '';
+                                return {
+                                    i,
+                                    platform: /formio/i.test(classes) ? 'formio' : (/osui|outsystems/i.test(classes + ' ' + A(el, 'data-block') + ' ' + A(el, 'data-widget')) ? 'outsystems' : ''),
+                                    label: labelFor(target),
+                                    key: componentKey(target),
+                                    type: typeClass || A(target,'type') || target.tagName.toLowerCase(),
+                                    required: target.hasAttribute('required'),
+                                    disabled: target.hasAttribute('disabled'),
+                                };
+                            })
+                            .filter(c => c.label || c.key || c.platform)
+                            .slice(0,80);
+
+                        return {headings, tables, code, lists, images, key_values, sections, forms, lowcode_components};
                     }
                     """) or {}
                 except Exception:
@@ -442,7 +508,12 @@ class PageFetcher:
                     const body = document.body ? document.body.innerHTML.slice(0,3000).toLowerCase() : '';
 
                     let framework = 'static';
-                    if (document.getElementById('__next') || body.includes('__next_data__'))
+                    if (document.querySelector('.formio, .formio-component') || srcs.includes('formio') || inline.includes('formio'))
+                        framework = 'formio';
+                    else if (document.querySelector('[data-block], [data-widget], [data-container], .osui, [class*="osui-"]')
+                             || srcs.includes('outsystems') || inline.includes('outsystems') || inline.includes('__osvstate') || body.includes('outsystems-ui'))
+                        framework = 'outsystems';
+                    else if (document.getElementById('__next') || body.includes('__next_data__'))
                         framework = 'next.js';
                     else if (document.getElementById('__nuxt') || body.includes('__nuxt__'))
                         framework = 'nuxt';

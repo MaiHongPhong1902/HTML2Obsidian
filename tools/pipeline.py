@@ -191,6 +191,14 @@ class BrowserPipeline:
         )
         result.extract = extract
         result.metadata_markdown = self._extractor.to_markdown(extract)
+        if getattr(extract, "lowcode", None):
+            ctx["lowcode"] = {
+                "platform": extract.lowcode.platform,
+                "indicators": extract.lowcode.indicators,
+                "components_count": len(extract.lowcode.components),
+                "schema_components_count": len(extract.lowcode.schema_components),
+            }
+            result.browser_context = ctx
 
         # 3. Clean HTML → Markdown
         if fetch.is_binary:

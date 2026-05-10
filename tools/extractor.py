@@ -89,6 +89,16 @@ class PageInteractives:
 
 
 @dataclass
+class LowCodeProfile:
+    """Low-code/no-code platform signals and extracted rendered components."""
+    platform: str = ""
+    indicators: list[str] = field(default_factory=list)
+    components: list[dict] = field(default_factory=list)
+    forms: list[dict] = field(default_factory=list)
+    schema_components: list[dict] = field(default_factory=list)
+
+
+@dataclass
 class ExtractResult:
     metadata: PageMetadata
     links: PageLinks
@@ -97,6 +107,7 @@ class ExtractResult:
     # iframes: [{"src", "type": youtube|spotify|maps|same_origin|cross_origin, "video_id"}]
     layout: Optional[PageLayout] = None
     interactives: Optional[PageInteractives] = None
+    lowcode: Optional[LowCodeProfile] = None
 
 
 class PageExtractor:
@@ -110,7 +121,10 @@ class PageExtractor:
         has_shadow_dom: bool = False,
     ) -> ExtractResult:
         soup = BeautifulSoup(html, "lxml")
+        lowcode = self._extract_lowcode(soup)
         layout = self._extract_layout(soup, base_url, spa_framework, has_shadow_dom)
+        if lowcode and lowcode.platform and layout.framework == "static":
+            layout.framework = lowcode.platform
         return ExtractResult(
             metadata=self._extract_metadata(soup, base_url),
             links=self._extract_links(soup, base_url),
@@ -118,6 +132,7 @@ class PageExtractor:
             iframes=self._extract_iframes(soup, base_url),
             layout=layout,
             interactives=self._extract_interactives(soup),
+            lowcode=lowcode,
         )
 
     # ------------------------------------------------------------------
@@ -317,7 +332,18 @@ class PageExtractor:
         inline = " ".join(
             (s.string or "") for s in soup.find_all("script") if s.string
         )[:5000].lower()
+        body = str(soup.body or "")[:20000].lower()
 
+        if "formio" in srcs or "formio" in inline or "formio" in body or soup.select_one(".formio, .formio-component"):
+            return "formio"
+        if (
+            "outsystems" in srcs
+            or "outsystems" in inline
+            or "__osvstate" in inline
+            or soup.select_one("[data-block], [data-widget], [data-container], .osui, [class*='osui-']")
+            or "outsystems-ui" in body
+        ):
+            return "outsystems"
         if soup.find(id="__next") or "__next_data__" in inline or "next.js" in srcs:
             return "next.js"
         if soup.find(id="__nuxt") or "__nuxt__" in inline or "nuxt" in srcs:
@@ -400,6 +426,7 @@ class PageExtractor:
                 or (el.get("value") or "").strip()
                 or (el.get("aria-label") or "").strip()
                 or (el.get("title") or "").strip()
+                or self._label_for_control(soup, el)
             )
             if not label or len(label) >= 120:
                 continue
@@ -413,6 +440,8 @@ class PageExtractor:
                 "type": itype or ("button" if el.name == "button" else ""),
                 "id": (el.get("id") or "").strip(),
                 "name": (el.get("name") or "").strip(),
+                "data_key": self._component_key(el),
+                "action": (el.get("data-action") or el.get("formaction") or "").strip(),
                 "classes": " ".join(el.get("class") or [])[:80],
                 "role": (el.get("role") or "").strip(),
                 "aria_label": (el.get("aria-label") or "").strip(),
@@ -429,26 +458,38 @@ class PageExtractor:
             itype = (inp.get("type") or "").lower()
             if itype not in text_types:
                 continue
+            label = self._label_for_control(soup, inp)
             result.inputs.append({
                 "type": itype or "text",
                 "name": (inp.get("name") or "").strip(),
                 "id": (inp.get("id") or "").strip(),
+                "label": label,
+                "data_key": self._component_key(inp),
                 "placeholder": (inp.get("placeholder") or "").strip(),
                 "aria_label": (inp.get("aria-label") or "").strip(),
                 "required": inp.has_attr("required"),
+                "disabled": inp.has_attr("disabled"),
+                "readonly": inp.has_attr("readonly"),
+                "validation": self._validation_text(inp),
                 "value": (inp.get("value") or "").strip()[:80],
                 "selector": self._css_selector(inp),
             })
 
         # Textareas
         for ta in soup.find_all("textarea"):
+            label = self._label_for_control(soup, ta)
             result.inputs.append({
                 "type": "textarea",
                 "name": (ta.get("name") or "").strip(),
                 "id": (ta.get("id") or "").strip(),
+                "label": label,
+                "data_key": self._component_key(ta),
                 "placeholder": (ta.get("placeholder") or "").strip(),
                 "aria_label": (ta.get("aria-label") or "").strip(),
                 "required": ta.has_attr("required"),
+                "disabled": ta.has_attr("disabled"),
+                "readonly": ta.has_attr("readonly"),
+                "validation": self._validation_text(ta),
                 "value": "",
                 "selector": self._css_selector(ta),
             })
@@ -461,10 +502,16 @@ class PageExtractor:
                 opt_val = (o.get("value") or "").strip()
                 if opt_text:
                     options.append({"value": opt_val, "label": opt_text})
+            label = self._label_for_control(soup, sel)
             result.selects.append({
                 "name": (sel.get("name") or "").strip(),
                 "id": (sel.get("id") or "").strip(),
+                "label": label,
+                "data_key": self._component_key(sel),
                 "aria_label": (sel.get("aria-label") or "").strip(),
+                "required": sel.has_attr("required"),
+                "disabled": sel.has_attr("disabled"),
+                "validation": self._validation_text(sel),
                 "options": options[:15],
                 "selector": self._css_selector(sel),
             })
@@ -475,8 +522,16 @@ class PageExtractor:
             for child in form.find_all(["input", "textarea", "select"]):
                 fname = (child.get("name") or child.get("id") or "").strip()
                 ftype = (child.get("type") or child.name or "").lower()
-                if fname:
-                    fields.append({"name": fname, "type": ftype})
+                label = self._label_for_control(soup, child)
+                data_key = self._component_key(child)
+                if fname or label or data_key:
+                    fields.append({
+                        "name": fname,
+                        "type": ftype,
+                        "label": label,
+                        "data_key": data_key,
+                        "required": child.has_attr("required"),
+                    })
             result.forms.append({
                 "action": (form.get("action") or "").strip(),
                 "method": (form.get("method") or "get").upper(),
@@ -534,6 +589,358 @@ class PageExtractor:
 
         return result
 
+    # ------------------------------------------------------------------
+    # Low-code/no-code platform extraction
+    # ------------------------------------------------------------------
+
+    _FORMIO_COMPONENT_TYPES = {
+        "textfield", "textarea", "number", "password", "email", "phoneNumber",
+        "phone", "url", "checkbox", "selectboxes", "select", "radio", "button",
+        "datetime", "day", "time", "currency", "datagrid", "editgrid",
+        "container", "panel", "columns", "fieldset", "hidden", "file",
+        "signature", "content", "htmlelement",
+    }
+
+    def _extract_lowcode(self, soup: BeautifulSoup) -> Optional[LowCodeProfile]:
+        indicators = self._detect_lowcode_indicators(soup)
+        if not indicators:
+            return None
+
+        platform = "low-code"
+        if any(item.startswith("formio") for item in indicators):
+            platform = "formio"
+        elif any(item.startswith("outsystems") for item in indicators):
+            platform = "outsystems"
+
+        components: list[dict] = []
+        if platform == "formio":
+            components.extend(self._extract_formio_components(soup))
+        else:
+            components.extend(self._extract_generic_lowcode_components(soup))
+        components = self._dedupe_components(components)[:120]
+
+        schema_components = self._extract_embedded_schema_components(soup)[:120]
+        forms = self._extract_lowcode_forms(soup, components)[:30]
+
+        return LowCodeProfile(
+            platform=platform,
+            indicators=indicators[:20],
+            components=components,
+            forms=forms,
+            schema_components=schema_components,
+        )
+
+    def _detect_lowcode_indicators(self, soup: BeautifulSoup) -> list[str]:
+        indicators: list[str] = []
+        srcs = " ".join(s.get("src", "") for s in soup.find_all("script", src=True)).lower()
+        inline = " ".join((s.string or "")[:5000] for s in soup.find_all("script") if s.string).lower()
+        body = str(soup.body or "")[:50000].lower()
+
+        if "formio" in srcs:
+            indicators.append("formio-script")
+        if "formio" in inline:
+            indicators.append("formio-inline-schema")
+        if soup.select_one(".formio, .formio-form, .formio-component"):
+            indicators.append("formio-dom")
+        if soup.select_one("[name^='data['], [data-key].formio-component"):
+            indicators.append("formio-data-keys")
+
+        if "outsystems" in srcs:
+            indicators.append("outsystems-script")
+        if "outsystems" in inline or "__osvstate" in inline:
+            indicators.append("outsystems-runtime-state")
+        if soup.select_one("[data-block], [data-widget], [data-container]"):
+            indicators.append("outsystems-data-attrs")
+        if soup.select_one(".osui, [class*='osui-'], [class*='outsystems']") or "outsystems-ui" in body:
+            indicators.append("outsystems-ui")
+
+        return list(dict.fromkeys(indicators))
+
+    def _extract_formio_components(self, soup: BeautifulSoup) -> list[dict]:
+        components: list[dict] = []
+        wrappers = soup.select(".formio-component, [data-key]")
+        for wrapper in wrappers[:160]:
+            classes = [str(c) for c in (wrapper.get("class") or [])]
+            if "formio-component" not in classes and not wrapper.find_parent(class_="formio"):
+                continue
+            control = wrapper if wrapper.name in {"input", "textarea", "select", "button"} else wrapper.find(["input", "textarea", "select", "button"])
+            key = (wrapper.get("data-key") or self._component_key(control or wrapper)).strip()
+            ctype = self._formio_type_from_classes(classes)
+            if control and not ctype:
+                ctype = (control.get("type") or control.name or "").lower()
+            label = self._clean_label_text(
+                (wrapper.select_one("label") or wrapper.select_one(".control-label"))
+            )
+            if not label and wrapper.name == "button":
+                label = wrapper.get_text(strip=True)[:120]
+            if not label and control:
+                label = self._label_for_control(soup, control)
+            required = (
+                bool(control and control.has_attr("required"))
+                or "field-required" in classes
+                or bool(wrapper.select_one(".formio-required"))
+            )
+            components.append({
+                "platform": "formio",
+                "source": "rendered-dom",
+                "key": key,
+                "label": label,
+                "type": ctype or "component",
+                "required": required,
+                "disabled": bool(control and control.has_attr("disabled")),
+                "readonly": bool(control and control.has_attr("readonly")),
+                "validation": self._validation_text(control or wrapper),
+                "selector": self._css_selector(control or wrapper),
+            })
+        return components
+
+    def _extract_generic_lowcode_components(self, soup: BeautifulSoup) -> list[dict]:
+        components: list[dict] = []
+        for el in soup.find_all(["input", "textarea", "select", "button"])[:180]:
+            itype = (el.get("type") or el.name or "").lower()
+            if el.name == "input" and itype in {"hidden", "submit", "button", "reset", "image"}:
+                continue
+            label = self._label_for_control(soup, el)
+            key = self._component_key(el)
+            if not (label or key or el.has_attr("required")):
+                continue
+            components.append({
+                "platform": "",
+                "source": "rendered-dom",
+                "key": key,
+                "label": label,
+                "type": itype or el.name,
+                "required": el.has_attr("required"),
+                "disabled": el.has_attr("disabled"),
+                "readonly": el.has_attr("readonly"),
+                "validation": self._validation_text(el),
+                "selector": self._css_selector(el),
+            })
+        return components
+
+    def _extract_lowcode_forms(self, soup: BeautifulSoup, components: list[dict]) -> list[dict]:
+        forms: list[dict] = []
+        for form in soup.find_all("form")[:20]:
+            fields = []
+            for control in form.find_all(["input", "textarea", "select", "button"])[:40]:
+                if control.name == "input" and (control.get("type") or "").lower() == "hidden":
+                    continue
+                fields.append({
+                    "key": self._component_key(control),
+                    "label": self._label_for_control(soup, control),
+                    "type": (control.get("type") or control.name or "").lower(),
+                    "required": control.has_attr("required"),
+                })
+            forms.append({
+                "id": (form.get("id") or "").strip(),
+                "name": (form.get("name") or "").strip(),
+                "action": (form.get("action") or "").strip(),
+                "method": (form.get("method") or "get").upper(),
+                "fields": fields,
+                "selector": self._css_selector(form),
+            })
+
+        if not forms and components:
+            forms.append({
+                "id": "",
+                "name": "rendered-lowcode-form",
+                "action": "",
+                "method": "",
+                "fields": [
+                    {
+                        "key": c.get("key", ""),
+                        "label": c.get("label", ""),
+                        "type": c.get("type", ""),
+                        "required": c.get("required", False),
+                    }
+                    for c in components[:40]
+                ],
+                "selector": "",
+            })
+        return forms
+
+    def _extract_embedded_schema_components(self, soup: BeautifulSoup) -> list[dict]:
+        components: list[dict] = []
+
+        for script in soup.find_all("script"):
+            script_type = (script.get("type") or "").lower()
+            text = (script.string or script.get_text() or "").strip()
+            if not text or len(text) > 150000:
+                continue
+
+            if "json" in script_type:
+                try:
+                    data = json.loads(text)
+                    self._walk_schema_components(data, components)
+                except Exception:
+                    pass
+                continue
+
+            if "components" not in text or not re.search(r"\b(key|label|type)\b", text):
+                continue
+            for match in re.finditer(r"\{[^{}]{0,1200}\}", text):
+                chunk = match.group(0)
+                if '"key"' not in chunk and "'key'" not in chunk:
+                    continue
+                normalized = re.sub(r"([{,]\s*)'([^']+)'\s*:", r'\1"\2":', chunk)
+                normalized = re.sub(r":\s*'([^']*)'", lambda m: ': ' + json.dumps(m.group(1)), normalized)
+                try:
+                    data = json.loads(normalized)
+                    self._walk_schema_components(data, components)
+                except Exception:
+                    continue
+
+        return self._dedupe_components(components)
+
+    def _walk_schema_components(self, value, components: list[dict]) -> None:
+        if len(components) >= 160:
+            return
+        if isinstance(value, dict):
+            key = str(value.get("key") or "").strip()
+            ctype = str(value.get("type") or "").strip()
+            label = str(value.get("label") or value.get("title") or "").strip()
+            if key and (ctype or label):
+                components.append({
+                    "source": "embedded-schema",
+                    "key": key,
+                    "label": label,
+                    "type": ctype,
+                    "required": bool(
+                        value.get("required")
+                        or (isinstance(value.get("validate"), dict) and value["validate"].get("required"))
+                    ),
+                    "disabled": bool(value.get("disabled")),
+                    "hidden": bool(value.get("hidden")),
+                    "selector": "",
+                })
+            for child_key in ("components", "columns", "rows", "children"):
+                child = value.get(child_key)
+                if isinstance(child, list):
+                    for item in child:
+                        if isinstance(item, dict) and child_key == "columns" and "components" in item:
+                            self._walk_schema_components(item.get("components"), components)
+                        else:
+                            self._walk_schema_components(item, components)
+            for item in value.values():
+                if isinstance(item, (dict, list)):
+                    self._walk_schema_components(item, components)
+        elif isinstance(value, list):
+            for item in value:
+                self._walk_schema_components(item, components)
+
+    def _dedupe_components(self, components: list[dict]) -> list[dict]:
+        deduped: list[dict] = []
+        seen: set[str] = set()
+        for component in components:
+            key = (
+                component.get("source", ""),
+                component.get("key", ""),
+                component.get("label", ""),
+                component.get("type", ""),
+                component.get("selector", ""),
+            )
+            key_s = "|".join(str(part).lower() for part in key)
+            if key_s in seen:
+                continue
+            seen.add(key_s)
+            deduped.append(component)
+        return deduped
+
+    def _formio_type_from_classes(self, classes: list[str]) -> str:
+        for cls in classes:
+            if not cls.startswith("formio-component-"):
+                continue
+            suffix = cls.replace("formio-component-", "", 1)
+            if suffix in self._FORMIO_COMPONENT_TYPES:
+                return suffix
+        return ""
+
+    def _label_for_control(self, soup: BeautifulSoup, el) -> str:
+        if not el:
+            return ""
+        el_id = (el.get("id") or "").strip()
+        if el_id:
+            label = soup.find("label", attrs={"for": el_id})
+            text = self._clean_label_text(label)
+            if text:
+                return text
+
+        labelledby = (el.get("aria-labelledby") or "").strip()
+        if labelledby:
+            parts = []
+            for part_id in labelledby.split():
+                ref = soup.find(id=part_id)
+                text = self._clean_label_text(ref)
+                if text:
+                    parts.append(text)
+            if parts:
+                return " ".join(parts)[:120]
+
+        parent_label = el.find_parent("label")
+        text = self._clean_label_text(parent_label)
+        if text:
+            return text
+
+        for parent in list(el.parents)[:5]:
+            if not getattr(parent, "find", None):
+                continue
+            label = (
+                parent.find("label")
+                or parent.find(class_=re.compile(r"(control-label|formio-label|label)", re.I))
+                or parent.find(attrs={"data-label": True})
+            )
+            text = self._clean_label_text(label)
+            if text:
+                return text
+
+        return (el.get("aria-label") or el.get("placeholder") or el.get("title") or "").strip()[:120]
+
+    def _clean_label_text(self, el) -> str:
+        if not el:
+            return ""
+        text = " ".join(el.stripped_strings)
+        text = re.sub(r"\s+", " ", text).strip(" *:\n\t")
+        return text[:120]
+
+    def _component_key(self, el) -> str:
+        if not el:
+            return ""
+        for node in [el] + list(el.parents)[:5]:
+            if not getattr(node, "get", None):
+                continue
+            for attr in ("data-key", "data-name", "data-field", "data-input", "data-component", "name", "id"):
+                raw = (node.get(attr) or "").strip()
+                if not raw:
+                    continue
+                match = re.match(r"data\[([^\]]+)\]", raw)
+                if match:
+                    return match.group(1)
+                if attr.startswith("data-") or attr == "name":
+                    return raw[:120]
+        return ""
+
+    def _validation_text(self, el) -> str:
+        if not el:
+            return ""
+        parts: list[str] = []
+        if el.has_attr("required"):
+            parts.append("required")
+        for attr in ("min", "max", "minlength", "maxlength", "pattern"):
+            val = (el.get(attr) or "").strip()
+            if val:
+                parts.append(f"{attr}={val[:80]}")
+        if (el.get("aria-invalid") or "").lower() == "true":
+            parts.append("aria-invalid")
+
+        for parent in [el] + list(el.parents)[:3]:
+            if not getattr(parent, "find_all", None):
+                continue
+            for msg in parent.find_all(class_=re.compile(r"(validation|error|invalid|feedback|help-block)", re.I), limit=3):
+                text = self._clean_label_text(msg)
+                if text and text not in parts:
+                    parts.append(text[:120])
+        return "; ".join(parts[:5])
+
     @staticmethod
     def _css_selector(el) -> str:
         """Build a best-effort unique CSS selector for a BeautifulSoup tag."""
@@ -574,6 +981,13 @@ class PageExtractor:
 
         if md.og_image:
             lines.append(f"- **OG Image:** {md.og_image}")
+
+        if result.lowcode and result.lowcode.platform:
+            lines += ["", "## Low-code / No-code"]
+            lines.append(f"- **Platform:** {result.lowcode.platform}")
+            lines.append(f"- **Indicators:** {', '.join(result.lowcode.indicators) if result.lowcode.indicators else 'none'}")
+            lines.append(f"- **Rendered components:** {len(result.lowcode.components)}")
+            lines.append(f"- **Schema components:** {len(result.lowcode.schema_components)}")
 
         # External links
         lines += ["", "## 🔗 External Links"]

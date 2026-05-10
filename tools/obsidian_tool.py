@@ -19,6 +19,7 @@ LLM_SECTION_HEADINGS = {
     "summary": "## 📝 Summary",
     "agent_snapshot": "## Agent Snapshot",
     "page_structure": "## 🏗️ Page Structure",
+    "lowcode": "## Low-code / No-code Model",
     "interactive_elements": "## 🖱️ Interactive Elements",
     "content": "## 📄 Content",
     "relationships": "## 🔗 Relationships",
@@ -36,6 +37,8 @@ PROTECTED_FRONTMATTER_FIELDS = {
     "from_url",
     "framework",
     "has_shadow_dom",
+    "lowcode_platform",
+    "lowcode_components_count",
     "video_id",
     "channel",
     "upload_date",
@@ -63,7 +66,8 @@ TOOL_SCHEMA = {
         "Fetch a URL and create an Obsidian Markdown note with YAML frontmatter, "
         "[[WikiLinks]] for key entities, smart auto-generated tags from domain/metadata/URL signals, "
         "and Relationships / References sections. "
-        "Supports SPA pages (React/Vue/Next.js), Wikipedia, YouTube, GitHub, arXiv, "
+        "Supports SPA pages (React/Vue/Next.js), low-code/no-code rendered forms "
+        "(Form.io, OutSystems), Wikipedia, YouTube, GitHub, arXiv, "
         "and can optionally generate a dedicated hierarchical site/tree map note."
     ),
     "parameters": {
@@ -128,12 +132,22 @@ TOOL_SCHEMA = {
                 ),
                 "default": False,
             },
+            "split": {
+                "type": "boolean",
+                "description": "Alias for split_sections, matching the CLI --split flag.",
+                "default": False,
+            },
             "include_site_map": {
                 "type": "boolean",
                 "description": (
                     "Generate a dedicated site map note with a hierarchical URL tree "
                     "built from the page's internal navigation links."
                 ),
+                "default": False,
+            },
+            "site_map": {
+                "type": "boolean",
+                "description": "Alias for include_site_map, matching the CLI --site-map / --sitemap flag.",
                 "default": False,
             },
             "site_map_style": {
@@ -215,6 +229,7 @@ TOOL_SCHEMA = {
                                         "summary",
                                         "agent_snapshot",
                                         "page_structure",
+                                        "lowcode",
                                         "interactive_elements",
                                         "content",
                                         "relationships",
@@ -233,6 +248,7 @@ TOOL_SCHEMA = {
                                         "summary",
                                         "agent_snapshot",
                                         "page_structure",
+                                        "lowcode",
                                         "interactive_elements",
                                         "content",
                                         "relationships",
@@ -274,7 +290,9 @@ def create_obsidian_note(
     from_title: str = "",
     browser_profile: Optional[str] = None,
     split_sections: bool = False,
+    split: Optional[bool] = None,
     include_site_map: bool = False,
+    site_map: Optional[bool] = None,
     site_map_style: str = "tree",
     site_map_max_depth: int = 3,
     site_map_max_internal_links: int = 120,
@@ -304,6 +322,10 @@ def create_obsidian_note(
     """
     extra_tags = extra_tags or []
     llm_config = llm_config or {}
+    if split is not None:
+        split_sections = bool(split_sections or split)
+    if site_map is not None:
+        include_site_map = bool(include_site_map or site_map)
 
     try:
         normalized_llm = _normalize_llm_config(llm_config)
@@ -815,6 +837,7 @@ def _build_structured_data(result, note, limit: int) -> dict:
     metadata = extract.metadata if extract else None
     layout = extract.layout if extract else None
     interactives = extract.interactives if extract else None
+    lowcode = getattr(extract, "lowcode", None) if extract else None
 
     structured = {
         "page": {
@@ -857,8 +880,16 @@ def _build_structured_data(result, note, limit: int) -> dict:
         "interactives": {
             "buttons": (interactives.buttons if interactives else [])[:limit],
             "inputs": (interactives.inputs if interactives else [])[:limit],
+            "selects": (interactives.selects if interactives else [])[:limit],
             "forms": (interactives.forms if interactives else [])[:limit],
             "nav_links": (interactives.nav_links if interactives else [])[:limit],
+        },
+        "lowcode": {
+            "platform": lowcode.platform if lowcode else "",
+            "indicators": (lowcode.indicators if lowcode else [])[:limit],
+            "components": (lowcode.components if lowcode else [])[:limit],
+            "forms": (lowcode.forms if lowcode else [])[:limit],
+            "schema_components": (lowcode.schema_components if lowcode else [])[:limit],
         },
         "tool_rules": {
             "editable_sections": list(LLM_SECTION_HEADINGS.keys()),

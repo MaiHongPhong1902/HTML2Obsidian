@@ -178,6 +178,9 @@ class ObsidianFormatter:
         if result.extract and result.extract.layout:
             frontmatter["framework"] = result.extract.layout.framework
             frontmatter["has_shadow_dom"] = result.extract.layout.has_shadow_dom
+        if result.extract and getattr(result.extract, "lowcode", None) and result.extract.lowcode.platform:
+            frontmatter["lowcode_platform"] = result.extract.lowcode.platform
+            frontmatter["lowcode_components_count"] = len(result.extract.lowcode.components)
 
         return ObsidianNote(frontmatter=frontmatter, body=body)
 
@@ -391,6 +394,9 @@ class ObsidianFormatter:
             "tags": tags,
             "entities": sorted(entities)[:30],
         }
+        if extract_result and getattr(extract_result, "lowcode", None) and extract_result.lowcode.platform:
+            frontmatter["lowcode_platform"] = extract_result.lowcode.platform
+            frontmatter["lowcode_components_count"] = len(extract_result.lowcode.components)
 
         return ObsidianNote(frontmatter=frontmatter, body=body)
 
@@ -560,6 +566,11 @@ class ObsidianFormatter:
                     lines.append(f"| {tag_cell} | {name_cell} | {heading_cell} | {links_cell} |")
             lines.append("")
 
+        lowcode_lines = self._build_lowcode_section_lines(extract_result)
+        if lowcode_lines:
+            lines.extend(lowcode_lines)
+            lines.append("")
+
         # Interactive elements
         if extract_result and extract_result.interactives:
             iv = extract_result.interactives
@@ -598,16 +609,24 @@ class ObsidianFormatter:
 
                 if iv.inputs:
                     lines.append("**Input fields:**")
-                    lines.append("| type | name / id | placeholder | aria-label | required | selector |")
-                    lines.append("|------|-----------|-------------|------------|----------|----------|")
+                    lines.append("| label | key/name | type | placeholder | required | state | selector |")
+                    lines.append("|-------|----------|------|-------------|----------|-------|----------|")
                     for inp in iv.inputs:
                         itype = inp["type"]
-                        name = inp["name"] or inp["id"] or "—"
+                        name = inp.get("data_key") or inp["name"] or inp["id"] or "—"
+                        label = (inp.get("label") or inp.get("aria_label") or "—").replace("|", "｜")[:40]
                         ph = (inp["placeholder"] or "—").replace("|", "｜")[:40]
-                        al = (inp["aria_label"] or "—").replace("|", "｜")[:40]
                         req = "✓" if inp["required"] else ""
+                        state = []
+                        if inp.get("disabled"):
+                            state.append("disabled")
+                        if inp.get("readonly"):
+                            state.append("readonly")
+                        if inp.get("validation"):
+                            state.append(inp.get("validation", "")[:40].replace("|", "｜"))
+                        state_cell = ", ".join(state) or "—"
                         sel = inp["selector"][:60]
-                        lines.append(f"| `{itype}` | `{name}` | {ph} | {al} | {req} | `{sel}` |")
+                        lines.append(f"| {label} | `{name}` | `{itype}` | {ph} | {req} | {state_cell} | `{sel}` |")
                     lines.append("")
 
                 if iv.selects:
@@ -670,6 +689,72 @@ class ObsidianFormatter:
 
         return "\n".join(lines)
 
+    def _build_lowcode_section_lines(self, extract_result) -> list[str]:
+        lowcode = getattr(extract_result, "lowcode", None) if extract_result else None
+        if not lowcode or not (lowcode.platform or lowcode.components or lowcode.schema_components):
+            return []
+
+        lines = ["## Low-code / No-code Model\n"]
+        if lowcode.platform:
+            lines.append(f"**Platform:** `{lowcode.platform}`  ")
+        if lowcode.indicators:
+            lines.append(f"**Detected by:** {', '.join(f'`{item}`' for item in lowcode.indicators[:8])}  ")
+        lines.append("")
+
+        rendered = lowcode.components or []
+        if rendered:
+            lines.append("**Rendered components:**")
+            lines.append("| Label | Key/name | Type | Required | State | Selector |")
+            lines.append("|-------|----------|------|----------|-------|----------|")
+            for component in rendered[:35]:
+                label = self._table_text(component.get("label") or component.get("key") or "field", 50)
+                key = self._table_text(component.get("key") or "-", 40)
+                ctype = self._table_text(component.get("type") or "component", 30)
+                required = "yes" if component.get("required") else ""
+                state_bits = []
+                if component.get("disabled"):
+                    state_bits.append("disabled")
+                if component.get("readonly"):
+                    state_bits.append("readonly")
+                if component.get("hidden"):
+                    state_bits.append("hidden")
+                validation = self._table_text(component.get("validation") or "", 60)
+                if validation:
+                    state_bits.append(validation)
+                state = self._table_text(", ".join(state_bits) or "-", 70)
+                selector = self._table_text(component.get("selector") or "-", 60)
+                lines.append(f"| {label} | `{key}` | `{ctype}` | {required} | {state} | `{selector}` |")
+            lines.append("")
+
+        schema_components = lowcode.schema_components or []
+        if schema_components:
+            lines.append("**Embedded schema components:**")
+            lines.append("| Label | Key | Type | Required |")
+            lines.append("|-------|-----|------|----------|")
+            for component in schema_components[:25]:
+                label = self._table_text(component.get("label") or component.get("key") or "field", 50)
+                key = self._table_text(component.get("key") or "-", 40)
+                ctype = self._table_text(component.get("type") or "component", 30)
+                required = "yes" if component.get("required") else ""
+                lines.append(f"| {label} | `{key}` | `{ctype}` | {required} |")
+            lines.append("")
+
+        if lowcode.forms:
+            lines.append("**Forms:**")
+            for form in lowcode.forms[:8]:
+                name = form.get("name") or form.get("id") or form.get("selector") or "rendered form"
+                method = form.get("method") or ""
+                action = form.get("action") or "current page"
+                field_count = len(form.get("fields") or [])
+                lines.append(f"- `{self._table_text(name, 80)}` {method} -> `{self._table_text(action, 100)}` ({field_count} fields)")
+
+        return lines
+
+    def _table_text(self, value, limit: int = 80) -> str:
+        text = re.sub(r"\s+", " ", str(value or "")).strip()
+        text = text.replace("|", "/").replace("\n", " ")
+        return text[:limit]
+
     def _build_agent_snapshot_lines(self, result) -> list[str]:
         """Build a short, high-signal snapshot so an agent can orient quickly."""
         domain = urlparse(result.url).netloc.replace("www.", "")
@@ -690,6 +775,11 @@ class ObsidianFormatter:
             lines.append(f"- **Layout regions:** {', '.join(section_names)}")
         if actions:
             lines.append(f"- **Likely actions:** {', '.join(f'`{action}`' for action in actions)}")
+
+        lowcode = getattr(result.extract, "lowcode", None) if result.extract else None
+        if lowcode and lowcode.platform:
+            component_count = len(lowcode.components or []) + len(lowcode.schema_components or [])
+            lines.append(f"- **Low-code platform:** `{lowcode.platform}` ({component_count} components)")
 
         content_outline = self._extract_content_outline(result.clean_markdown)
         if content_outline:
@@ -761,7 +851,9 @@ class ObsidianFormatter:
 
         for input_field in interactives.inputs[:4]:
             label = (
-                input_field.get("placeholder")
+                input_field.get("label")
+                or input_field.get("data_key")
+                or input_field.get("placeholder")
                 or input_field.get("aria_label")
                 or input_field.get("name")
                 or input_field.get("id")
@@ -900,6 +992,7 @@ class ObsidianFormatter:
         extract = extract_result or getattr(result, "extract", None)
         metadata = extract.metadata if extract else None
         layout = extract.layout if extract else None
+        lowcode = getattr(extract, "lowcode", None) if extract else None
 
         if result:
             page_type = self._detect_page_type(result, domain)
@@ -911,6 +1004,12 @@ class ObsidianFormatter:
                 self._append_tag(tags, layout.framework)
             if layout.has_shadow_dom:
                 self._append_tag(tags, "shadow-dom")
+
+        if lowcode and lowcode.platform:
+            self._append_tag(tags, "low-code")
+            self._append_tag(tags, lowcode.platform)
+            if lowcode.components or lowcode.schema_components:
+                self._append_tag(tags, "form")
 
         if metadata:
             if metadata.og_type and metadata.og_type.lower() not in {"website", "object", "profile"}:
@@ -1175,6 +1274,11 @@ class ObsidianFormatter:
         if any(x in url for x in ["/login", "/signin", "/register", "/signup"]):
             return "form"
         if result.extract:
+            lowcode = getattr(result.extract, "lowcode", None)
+            if lowcode and (lowcode.components or lowcode.schema_components or lowcode.forms):
+                return "form"
+            if result.extract.interactives and (result.extract.interactives.forms or len(result.extract.interactives.inputs) >= 2):
+                return "form"
             if len(result.extract.links.internal) > 30:
                 return "listing"
         if not result.clean_markdown or len(result.clean_markdown) < 200:
@@ -1185,6 +1289,10 @@ class ObsidianFormatter:
         """List actions the agent can perform on this page."""
         actions = ["read_content"]
         if result.extract:
+            lowcode = getattr(result.extract, "lowcode", None)
+            if lowcode and (lowcode.components or lowcode.schema_components):
+                actions.append("inspect_form_schema")
+                actions.append("fill_form")
             if result.extract.links.internal:
                 actions.append("follow_internal_links")
             if result.extract.links.external:
@@ -1457,6 +1565,9 @@ class ObsidianFormatter:
             lay = result.extract.layout
             fm_parts.append(f"framework: {lay.framework}")
             fm_parts.append(f"has_shadow_dom: {str(lay.has_shadow_dom).lower()}")
+        if result.extract and getattr(result.extract, "lowcode", None) and result.extract.lowcode.platform:
+            fm_parts.append(f"lowcode_platform: {result.extract.lowcode.platform}")
+            fm_parts.append(f"lowcode_components_count: {len(result.extract.lowcode.components)}")
         fm_parts.append("---")
         frontmatter_str = "\n".join(fm_parts)
 
@@ -1472,6 +1583,8 @@ class ObsidianFormatter:
                 index_lines.append(f"**Framework:** `{lay.framework}`  ")
             if lay.has_shadow_dom:
                 index_lines.append("**Shadow DOM:** detected  ")
+            if result.extract and getattr(result.extract, "lowcode", None) and result.extract.lowcode.platform:
+                index_lines.append(f"**Low-code platform:** `{result.extract.lowcode.platform}`  ")
             index_lines.append("")
 
         # Sub-pages list — wikilinks use full unique stems
@@ -1495,6 +1608,11 @@ class ObsidianFormatter:
             for short, sec in section_files:
                 heading_cell = sec.heading[:60] if sec.heading else "—"
                 index_lines.append(f"| `<{sec.tag}>` | [[{sec_stem(short)}\\|{short}]] | {heading_cell} |")
+            index_lines.append("")
+
+        lowcode_lines = self._build_lowcode_section_lines(result.extract if result.extract else None)
+        if lowcode_lines:
+            index_lines.extend(lowcode_lines)
             index_lines.append("")
 
         # Relationships
