@@ -67,6 +67,9 @@ class ObsidianNote:
             or ": " in text
             or any(ch in text for ch in (":", "\n", "\t", '"', "#"))
             or text.lower() in {"true", "false", "null", "yes", "no", "on", "off", "~"}
+            # Quote numeric-looking strings so a value like "1.0" or "007"
+            # stays a string instead of being parsed as a number by YAML.
+            or bool(re.fullmatch(r"[+-]?(\d[\d,_]*)(\.\d+)?", text))
         )
         if needs_quote:
             escaped = (
@@ -282,9 +285,6 @@ class ObsidianFormatter:
         yt = YouTubeExtractor()
         # Pass raw HTML (if available) to parse ytInitialData
         html = getattr(result, "_html", "") or ""
-        if not html and result.extract:
-            pass
-
         info = yt.extract(result.url, html)
 
         if info is None:
@@ -960,7 +960,12 @@ class ObsidianFormatter:
                 continue
 
             escaped = re.escape(ent)
-            pattern = re.compile(r"\b" + escaped + r"\b", re.IGNORECASE)
+            # Use word-boundary lookarounds only on alphanumeric edges so that
+            # entities starting/ending with punctuation (e.g. "C++", ".NET",
+            # "Node.js") still match instead of being silently skipped.
+            left = r"(?<!\w)" if (ent[0].isalnum() or ent[0] == "_") else ""
+            right = r"(?!\w)" if (ent[-1].isalnum() or ent[-1] == "_") else ""
+            pattern = re.compile(left + escaped + right, re.IGNORECASE)
 
             # Find first occurrence OUTSIDE protected zones
             for m in pattern.finditer(text):

@@ -23,6 +23,17 @@ def test_yaml_scalar_types():
     assert ObsidianNote._yaml_scalar(None) == '""'
 
 
+def test_yaml_scalar_quotes_numeric_strings():
+    # Numeric-looking strings must stay strings, not be parsed as numbers.
+    assert ObsidianNote._yaml_scalar("1.0") == '"1.0"'
+    assert ObsidianNote._yaml_scalar("007") == '"007"'
+    assert ObsidianNote._yaml_scalar("-42") == '"-42"'
+    note = ObsidianNote(frontmatter={"version": "1.0", "code": "007"}, body="x")
+    parsed = yaml.safe_load(note.render().split("---", 2)[1])
+    assert parsed["version"] == "1.0"
+    assert parsed["code"] == "007"
+
+
 def test_render_roundtrips_through_yaml():
     note = ObsidianNote(
         frontmatter={
@@ -115,6 +126,21 @@ def test_wikify_skips_protected_zones():
 def test_wikify_skips_page_title():
     fmt = ObsidianFormatter(use_spacy=False)
     out = fmt._wikify("Python tutorial", ["Python"], "Python")
+    assert "[[Python]]" not in out
+
+
+def test_wikify_links_punctuation_entities():
+    fmt = ObsidianFormatter(use_spacy=False)
+    out = fmt._wikify("I write C++ and .NET and Node.js daily.", ["C++", ".NET", "Node.js"], "Doc")
+    assert "[[C++]]" in out
+    assert "[[.NET]]" in out
+    assert "[[Node.js]]" in out
+
+
+def test_wikify_word_boundary_still_respected():
+    fmt = ObsidianFormatter(use_spacy=False)
+    out = fmt._wikify("Pythonic code", ["Python"], "Doc")
+    # "Python" inside "Pythonic" must not be linked
     assert "[[Python]]" not in out
 
 
