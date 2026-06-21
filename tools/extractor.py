@@ -140,7 +140,7 @@ class PageExtractor:
     # ------------------------------------------------------------------
 
     def _extract_metadata(self, soup: BeautifulSoup, base_url: str) -> PageMetadata:
-        def meta(name: str = None, prop: str = None) -> str:
+        def meta(name: Optional[str] = None, prop: Optional[str] = None) -> str:
             if name:
                 tag = soup.find("meta", attrs={"name": name})
             elif prop:
