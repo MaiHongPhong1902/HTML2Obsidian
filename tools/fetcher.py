@@ -78,6 +78,45 @@ _DEFAULT_STORAGE_STATE_CANDIDATES = (
 )
 
 
+def run_async(coro):
+    """Run a coroutine to completion, even when an event loop is already running.
+
+    ``asyncio.run`` raises ``RuntimeError`` if called from inside a running
+    loop (e.g. Jupyter, FastAPI handlers). In that case we run the coroutine
+    on a fresh loop inside a dedicated worker thread so callers keep their
+    simple synchronous API.
+    """
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    import threading
+
+    result_box: dict = {}
+
+    def _worker() -> None:
+        loop = asyncio.new_event_loop()
+        try:
+            asyncio.set_event_loop(loop)
+            result_box["value"] = loop.run_until_complete(coro)
+        except BaseException as exc:  # noqa: BLE001 — re-raised on caller thread
+            result_box["error"] = exc
+        finally:
+            try:
+                loop.close()
+            finally:
+                asyncio.set_event_loop(None)
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    thread.join()
+
+    if "error" in result_box:
+        raise result_box["error"]
+    return result_box.get("value")
+
+
 @dataclass
 class FetchResult:
     url: str
@@ -256,8 +295,8 @@ class PageFetcher:
         wait_for_selector: Optional[str] = None,   # CSS selector to wait for before snapshot
         wait_for_timeout: float = 10.0,             # max seconds to wait for the selector
     ) -> FetchResult:
-        """Synchronous wrapper — calls asyncio.run() internally."""
-        return asyncio.run(
+        """Synchronous wrapper — safe even inside a running event loop."""
+        return run_async(
             self.afetch(
                 url, render_js, screenshot, screenshot_path,
                 scroll_to_bottom, wait_for_selector, wait_for_timeout,

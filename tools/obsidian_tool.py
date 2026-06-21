@@ -1059,14 +1059,12 @@ def query_page_elements(
             page_metrics (dict) — load_time_ms, dom_nodes, etc.
             error    (str | None)
     """
-    from .fetcher import PageFetcher
+    from .fetcher import PageFetcher, run_async
 
     attributes = attributes or []
     fetcher = PageFetcher()
 
     try:
-        import asyncio
-
         async def _run():
             if render_js:
                 fetch = await fetcher._fetch_playwright(
@@ -1121,7 +1119,7 @@ def query_page_elements(
                 "error": None,
             }
 
-        return asyncio.run(_run())
+        return run_async(_run())
 
     except Exception as exc:
         return {

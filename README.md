@@ -1,5 +1,7 @@
 ﻿# HTML2Obsidian
 
+[![CI](https://github.com/MaiHongPhong1902/HTML2Obsidian/actions/workflows/ci.yml/badge.svg)](https://github.com/MaiHongPhong1902/HTML2Obsidian/actions/workflows/ci.yml)
+
 Fetch any URL and produce structured [Obsidian](https://obsidian.md/) Markdown notes — ready for LLM tool calling and knowledge-graph building.
 
 ---

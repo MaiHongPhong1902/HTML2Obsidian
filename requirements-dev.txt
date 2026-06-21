@@ -1,0 +1,5 @@
+# Development / test dependencies
+-r requirements.txt
+
+pytest>=8.0.0
+PyYAML>=6.0        # used in tests to validate generated YAML frontmatter

@@ -268,8 +268,9 @@ class PageExtractor:
                 sections.append(self._build_section(el, tag_name, name, base_url))
 
         # 2. Fallback: <div> whose id/class matches a layout pattern
+        candidate_divs = soup.find_all("div", limit=80)
         for role, patterns in self._LAYOUT_DIV_ROLES.items():
-            for div in soup.find_all("div", limit=50):
+            for div in candidate_divs:
                 div_id = (div.get("id") or "").lower()
                 div_cls = " ".join(str(c) for c in (div.get("class") or [])).lower()
                 if any(p in div_id or p in div_cls for p in patterns):

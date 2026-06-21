@@ -35,15 +35,48 @@ class ObsidianNote:
                 if v:
                     yaml_lines.append(f"{k}:")
                     for item in v:
-                        yaml_lines.append(f"  - {item}")
+                        yaml_lines.append(f"  - {self._yaml_scalar(item)}")
                 else:
                     yaml_lines.append(f"{k}: []")
-            elif isinstance(v, str) and ("\n" in v or ":" in v):
-                yaml_lines.append(f'{k}: "{v}"')
             else:
-                yaml_lines.append(f"{k}: {v}")
+                yaml_lines.append(f"{k}: {self._yaml_scalar(v)}")
         yaml_lines.append("---")
         return "\n".join(yaml_lines) + "\n\n" + self.body
+
+    @staticmethod
+    def _yaml_scalar(value) -> str:
+        """Render a value as a YAML scalar, quoting/escaping when needed.
+
+        Prevents broken frontmatter when titles or entities contain colons,
+        quotes, leading special characters, or YAML reserved words.
+        """
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        if isinstance(value, (int, float)):
+            return str(value)
+        if value is None:
+            return '""'
+
+        text = str(value)
+        if text == "":
+            return '""'
+
+        needs_quote = (
+            text != text.strip()
+            or text[0] in "#&*!|>'\"%@`-?:[]{},"
+            or ": " in text
+            or any(ch in text for ch in (":", "\n", "\t", '"', "#"))
+            or text.lower() in {"true", "false", "null", "yes", "no", "on", "off", "~"}
+        )
+        if needs_quote:
+            escaped = (
+                text.replace("\\", "\\\\")
+                .replace('"', '\\"')
+                .replace("\n", " ")
+                .replace("\t", " ")
+            )
+            return f'"{escaped}"'
+        return text
 
 
 @dataclass
@@ -365,6 +398,7 @@ class ObsidianFormatter:
     ) -> ObsidianNote:
         """Format from raw markdown (no PipelineResult required)."""
         domain = urlparse(url).netloc.replace("www.", "")
+        effective_title = note_title or title or domain
         tags = self._build_tags(
             domain,
             None,
@@ -383,7 +417,6 @@ class ObsidianFormatter:
                 if lnk.get("text") and len(lnk["text"]) >= self.min_entity_len
             ]
 
-        effective_title = note_title or title or domain
         body = self._build_body_raw(clean_markdown, effective_title, entities, internal_links, url, extract_result)
 
         frontmatter = {
